@@ -7,9 +7,9 @@ from app.routers import matches_router, predictions_router, analytics_router
 load_dotenv()
 
 app = FastAPI(
-    title="Scout — Premier League AI Assistant",
+    title="Goat Tips — Premier League AI",
     description=(
-        "Análise narrativa e preditiva de partidas em tempo real.\n\n"
+        "Análise narrativa e preditiva de partidas da Premier League em tempo real.\n\n"
         "## Módulos\n"
         "| Prefixo | Responsabilidade |\n"
         "|---|---|\n"
@@ -38,6 +38,7 @@ app.include_router(analytics_router)
 async def health():
     return {
         "status": "ok",
+        "app": "Goat Tips",
         "version": "0.3.0",
         "league": "Premier League",
         "betsapi_league_id": 94,

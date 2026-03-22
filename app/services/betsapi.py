@@ -151,41 +151,52 @@ def _build_match(event: dict, status: str) -> MatchContext:
 
 async def get_live_matches() -> list[MatchContext]:
     """Retorna partidas da Premier League ao vivo, com odds e probabilidades."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(
-            f"{BASE_URL}/v1/events/inplay",
-            params={"token": TOKEN, "sport_id": 1, "league_id": PREMIER_LEAGUE_ID},
-        )
-        r.raise_for_status()
-        data = r.json()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            r = await client.get(
+                f"{BASE_URL}/v1/events/inplay",
+                params={"token": TOKEN, "sport_id": 1, "league_id": PREMIER_LEAGUE_ID},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.TimeoutException, httpx.HTTPError) as exc:
+        logger.warning("get_live_matches failed: %s", exc)
+        return []
 
-    results = []
-    for event in data.get("results", []):
-        match = _build_match(event, status="live")
-        odds = await _fetch_odds(match.event_id)
-        if odds:
+    matches = [_build_match(e, status="live") for e in data.get("results", [])]
+
+    # Parallel odds fetch (same pattern as upcoming)
+    odds_results = await asyncio.gather(
+        *[_fetch_odds(m.event_id) for m in matches],
+        return_exceptions=True,
+    )
+    for match, odds in zip(matches, odds_results):
+        if isinstance(odds, OddsSnapshot):
             match.odds = odds
             match.probabilities = _remove_bookmaker_margin(
                 odds.home_win, odds.draw, odds.away_win
             )
-        results.append(match)
-    return results
+    return matches
 
 
 async def get_upcoming_matches() -> list[MatchContext]:
     """Retorna próximos jogos da Premier League com odds pré-jogo."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(
-            f"{BASE_URL}/v1/events/upcoming",
-            params={"token": TOKEN, "sport_id": 1, "league_id": PREMIER_LEAGUE_ID},
-        )
-        r.raise_for_status()
-        data = r.json()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            r = await client.get(
+                f"{BASE_URL}/v1/events/upcoming",
+                params={"token": TOKEN, "sport_id": 1, "league_id": PREMIER_LEAGUE_ID},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.TimeoutException, httpx.HTTPError) as exc:
+        logger.warning("get_upcoming_matches failed: %s", exc)
+        return []
 
     events = data.get("results", [])
     matches = [_build_match(e, status="upcoming") for e in events]
 
-    # Fetch odds for all upcoming matches in parallel (with timeout guard per request)
+    # Fetch odds for all upcoming matches in parallel
     odds_results = await asyncio.gather(
         *[_fetch_odds(m.event_id) for m in matches],
         return_exceptions=True,

@@ -1,5 +1,5 @@
 -- ============================================================
--- Scout Premier League — Supabase Schema
+-- Goat Tips Premier League — Supabase Schema
 -- Run this once to initialise your database.
 -- ============================================================
 
