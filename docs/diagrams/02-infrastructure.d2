@@ -1,0 +1,213 @@
+title: Goat Tips — Infraestrutura IBM Cloud {
+  near: top-center
+  style.font-size: 24
+  style.bold: true
+}
+
+direction: down
+
+# ─────────────────────────────────────────────
+# EXTERNAL TRIGGERS
+# ─────────────────────────────────────────────
+internet: Internet / Clientes {
+  shape: cloud
+  style.fill: "#EFF6FF"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+}
+
+scheduler: IBM Cloud Scheduler\n(Cron) {
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/DevOps/Continuous%20Delivery.svg
+  style.fill: "#EEF2FF"
+  style.stroke: "#0F62FE"
+  style.border-radius: 8
+}
+
+# ─────────────────────────────────────────────
+# IBM CLOUD
+# ─────────────────────────────────────────────
+ibm: IBM Cloud {
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Networking/IBM%20Cloud%20.svg
+  style.fill: "#F0F4FF"
+  style.stroke: "#0F62FE"
+  style.stroke-width: 3
+  style.border-radius: 16
+
+  # ── Container Registry ──────────────────────
+  icr: IBM Container Registry (global)\nicr.io/goat-tips-ns {
+    shape: package
+    icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Compute/Cloud%20Registry.svg
+    style.fill: "#EEF2FF"
+    style.stroke: "#4F46E5"
+    style.stroke-width: 2
+    style.border-radius: 8
+
+    img_api: goat-tips-backend:latest {
+      shape: document
+      style.fill: "#C7D2FE"
+      style.stroke: "#4F46E5"
+    }
+    img_sync: goat-tips-daily-sync:latest {
+      shape: document
+      style.fill: "#C7D2FE"
+      style.stroke: "#4F46E5"
+    }
+    img_retrain: goat-tips-retrain:latest {
+      shape: document
+      style.fill: "#C7D2FE"
+      style.stroke: "#4F46E5"
+    }
+  }
+
+  # ── Code Engine ─────────────────────────────
+  ce: Code Engine — us-east\nProject: goat-tips-proj {
+    style.fill: "#DBEAFE"
+    style.stroke: "#0F62FE"
+    style.stroke-width: 2
+    style.border-radius: 12
+
+    api: Application\ngoat-tips-backend-api {
+      icon: https://cdn.simpleicons.org/fastapi/009485
+      style.fill: "#E0FFF8"
+      style.stroke: "#009485"
+      style.stroke-width: 2
+      style.border-radius: 8
+
+      url: HTTPS público\nhttps://goat-tips-backend-api\n.27s4ihbbhmjf.us-east\n.codeengine.appdomain.cloud {
+        shape: document
+        style.fill: "#A7F3D0"
+        style.stroke: "#059669"
+        style.font-size: 11
+      }
+    }
+
+    sync: Job\ngoat-tips-daily-sync\n⏰  0 3 * * * UTC {
+      icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/DevOps/Serverless%20Application.svg
+      style.fill: "#FEF9C3"
+      style.stroke: "#CA8A04"
+      style.stroke-width: 2
+      style.border-radius: 8
+    }
+
+    retrain: Job\ngoat-tips-retrain\n⏰  0 3 * * 1 UTC {
+      icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/DevOps/Serverless%20Application.svg
+      style.fill: "#FEF9C3"
+      style.stroke: "#CA8A04"
+      style.stroke-width: 2
+      style.border-radius: 8
+    }
+  }
+
+  # ── Cloud Object Storage ─────────────────────
+  cos: Cloud Object Storage — us-south\ngoat-tips-bucket {
+    shape: stored_data
+    icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Data%20%26%20Storage/Object%20Bucket.svg
+    style.fill: "#EEF2FF"
+    style.stroke: "#4F46E5"
+    style.stroke-width: 2
+
+    pkl: poisson_model.pkl\n(~2 MB, atualizado toda segunda) {
+      shape: document
+      style.fill: "#C7D2FE"
+      style.stroke: "#4F46E5"
+      style.font-size: 12
+    }
+  }
+}
+
+# ─────────────────────────────────────────────
+# SERVIÇOS EXTERNOS
+# ─────────────────────────────────────────────
+external: Serviços Externos {
+  style.fill: "#FAFAFA"
+  style.stroke: "#9CA3AF"
+  style.stroke-dash: 6
+  style.border-radius: 12
+
+  betsapi: BetsAPI {
+    shape: cloud
+    style.fill: "#FFFBEB"
+    style.stroke: "#D97706"
+    style.stroke-width: 2
+  }
+
+  groq: Groq Cloud\nLLM Inference {
+    shape: cloud
+    style.fill: "#F5F3FF"
+    style.stroke: "#7C3AED"
+    style.stroke-width: 2
+  }
+
+  supabase: Supabase\nus-west-2 {
+    shape: cylinder
+    icon: https://cdn.simpleicons.org/supabase/3ECF8E
+    style.fill: "#F0FDF4"
+    style.stroke: "#16A34A"
+    style.stroke-width: 2
+  }
+}
+
+# ─────────────────────────────────────────────
+# CONEXÕES
+# ─────────────────────────────────────────────
+internet -> ibm.ce.api: HTTPS {
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+}
+
+scheduler -> ibm.ce.sync: trigger diário {
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+  style.stroke-dash: 3
+}
+
+scheduler -> ibm.ce.retrain: trigger semanal {
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+  style.stroke-dash: 3
+}
+
+ibm.icr.img_api -> ibm.ce.api: pull image {
+  style.stroke: "#4F46E5"
+  style.stroke-dash: 4
+}
+ibm.icr.img_sync -> ibm.ce.sync: pull image {
+  style.stroke: "#4F46E5"
+  style.stroke-dash: 4
+}
+ibm.icr.img_retrain -> ibm.ce.retrain: pull image {
+  style.stroke: "#4F46E5"
+  style.stroke-dash: 4
+}
+
+ibm.ce.api -> external.betsapi: httpx async {
+  style.stroke: "#D97706"
+}
+ibm.ce.api -> external.groq: OpenAI SDK compat {
+  style.stroke: "#7C3AED"
+}
+ibm.ce.api -> external.supabase: asyncpg {
+  style.stroke: "#16A34A"
+}
+ibm.ce.api -> ibm.cos.pkl: download modelo {
+  style.stroke: "#4F46E5"
+  style.stroke-dash: 4
+}
+
+ibm.ce.sync -> external.betsapi: fetch {
+  style.stroke: "#D97706"
+  style.stroke-dash: 4
+}
+ibm.ce.sync -> external.supabase: upsert {
+  style.stroke: "#16A34A"
+  style.stroke-dash: 4
+}
+
+ibm.ce.retrain -> external.supabase: load events {
+  style.stroke: "#16A34A"
+  style.stroke-dash: 4
+}
+ibm.ce.retrain -> ibm.cos.pkl: upload pkl {
+  style.stroke: "#4F46E5"
+  style.stroke-width: 2
+}

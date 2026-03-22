@@ -1,0 +1,73 @@
+title: Goat Tips — Casos de Uso: Visão Geral {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+direction: down
+
+user: Frontend\n(Usuário / App) {
+  shape: person
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+  style.font-size: 12
+}
+
+scheduler: CE Job Scheduler\n(IBM Cloud Cron) {
+  shape: person
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/DevOps/Continuous%20Delivery.svg
+  style.fill: "#EEF2FF"
+  style.stroke: "#0F62FE"
+  style.stroke-width: 2
+  style.font-size: 13
+}
+
+system: Goat Tips API {
+  style.fill: "#F8FAFC"
+  style.stroke: "#1E293B"
+  style.stroke-width: 3
+  style.border-radius: 14
+  style.font-size: 28
+
+  matches: matches\n/matches\n(7 casos de uso) {
+    style.fill: "#EFF6FF"
+    style.stroke: "#3B82F6"
+    style.stroke-width: 2
+    style.border-radius: 10
+    style.font-size: 13
+    style.bold: true
+  }
+
+  predictions: predictions\n/predictions\n(7 casos de uso) {
+    style.fill: "#F5F3FF"
+    style.stroke: "#7C3AED"
+    style.stroke-width: 2
+    style.border-radius: 10
+    style.font-size: 13
+    style.bold: true
+  }
+
+  analytics: analytics\n/analytics\n(7 casos de uso) {
+    style.fill: "#F0FDF4"
+    style.stroke: "#16A34A"
+    style.stroke-width: 2
+    style.border-radius: 10
+    style.font-size: 13
+    style.bold: true
+  }
+
+  jobs: jobs\nJobs Agendados\n(2 casos de uso) {
+    style.fill: "#FFF7ED"
+    style.stroke: "#EA580C"
+    style.stroke-width: 2
+    style.border-radius: 10
+    style.font-size: 13
+    style.bold: true
+  }
+}
+
+user -> system.matches
+user -> system.predictions
+user -> system.analytics
+scheduler -> system.jobs

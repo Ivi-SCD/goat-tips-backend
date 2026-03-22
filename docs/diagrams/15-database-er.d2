@@ -1,0 +1,226 @@
+title: Goat Tips — Diagrama Entidade-Relacionamento (Supabase) {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+direction: right
+
+# ─────────────────────────────────────────────
+# TABELAS
+# ─────────────────────────────────────────────
+teams: teams {
+  shape: sql_table
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+
+  id: bigint {constraint: primary_key}
+  name: varchar(255)
+  image_id: varchar(100)
+  cc: varchar(10)
+  created_at: timestamptz
+  updated_at: timestamptz
+}
+
+events: events {
+  shape: sql_table
+  style.fill: "#EDE9FE"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+
+  id: bigint {constraint: primary_key}
+  time_unix: bigint
+  time_utc: timestamptz
+  time_status: varchar(20)
+  league_id: varchar(20)
+  home_team_id: bigint {constraint: foreign_key}
+  away_team_id: bigint {constraint: foreign_key}
+  home_score: smallint
+  away_score: smallint
+  round: varchar(50)
+  stadium_name: varchar(255)
+  stadium_city: varchar(100)
+  referee_name: varchar(255)
+  bet365_id: varchar(50)
+  created_at: timestamptz
+  updated_at: timestamptz
+}
+
+match_stats: match_stats {
+  shape: sql_table
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+
+  id: bigint {constraint: primary_key}
+  event_id: bigint {constraint: foreign_key}
+  metric: varchar(100)
+  home_value: numeric
+  away_value: numeric
+  period: varchar(20)
+  created_at: timestamptz
+}
+
+match_timeline: match_timeline {
+  shape: sql_table
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+
+  id: bigint {constraint: primary_key}
+  event_id: bigint {constraint: foreign_key}
+  timeline_id: bigint
+  text: text
+  created_at: timestamptz
+}
+
+odds_snapshots: odds_snapshots {
+  shape: sql_table
+  style.fill: "#FFF7ED"
+  style.stroke: "#EA580C"
+  style.stroke-width: 2
+
+  id: bigint {constraint: primary_key}
+  event_id: bigint {constraint: foreign_key}
+  market_key: varchar(50)
+  home_od: numeric
+  draw_od: numeric
+  away_od: numeric
+  over_od: numeric
+  under_od: numeric
+  yes_od: numeric
+  no_od: numeric
+  recorded_at: timestamptz
+}
+
+sync_log: sync_log {
+  shape: sql_table
+  style.fill: "#F8FAFC"
+  style.stroke: "#64748B"
+  style.stroke-width: 2
+
+  id: bigint {constraint: primary_key}
+  run_at: timestamptz
+  trigger: varchar(50)
+  events_fetched: int
+  events_upserted: int
+  errors: int
+  duration_ms: int
+  notes: text
+}
+
+conversation_sessions: conversation_sessions {
+  shape: sql_table
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+
+  id: bigint {constraint: primary_key}
+  session_id: text
+  event_id: text
+  messages: jsonb
+  updated_at: timestamptz
+}
+
+# ─────────────────────────────────────────────
+# VIEWS
+# ─────────────────────────────────────────────
+v_matches: VIEW — v_matches {
+  shape: sql_table
+  style.fill: "#EFF6FF"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 1
+  style.stroke-dash: 5
+
+  "": "JOIN events + teams (home e away)"
+  event_id: bigint
+  home_team_name: varchar
+  away_team_name: varchar
+  score: varchar
+  time_status: varchar
+}
+
+v_goal_timeline: VIEW — v_goal_timeline {
+  shape: sql_table
+  style.fill: "#EFF6FF"
+  style.stroke: "#CA8A04"
+  style.stroke-width: 1
+  style.stroke-dash: 5
+
+  "": "Filtra match_timeline WHERE text ~ 'N\\' - Goal'"
+  event_id: bigint
+  minute: int
+  team: varchar
+  player: varchar
+}
+
+# ─────────────────────────────────────────────
+# CONSTRAINTS (notas)
+# ─────────────────────────────────────────────
+c_stats: UNIQUE (event_id, metric, period) {
+  shape: text
+  style.font-size: 11
+  style.font-color: "#16A34A"
+  style.italic: true
+}
+
+c_timeline: UNIQUE (event_id, timeline_id) {
+  shape: text
+  style.font-size: 11
+  style.font-color: "#CA8A04"
+  style.italic: true
+}
+
+c_odds: UNIQUE (event_id, market_key) {
+  shape: text
+  style.font-size: 11
+  style.font-color: "#EA580C"
+  style.italic: true
+}
+
+c_conv: UNIQUE (session_id, event_id) {
+  shape: text
+  style.font-size: 11
+  style.font-color: "#7C3AED"
+  style.italic: true
+}
+
+# ─────────────────────────────────────────────
+# RELACIONAMENTOS
+# ─────────────────────────────────────────────
+events.home_team_id -> teams.id: home_team {
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+}
+events.away_team_id -> teams.id: away_team {
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+}
+
+match_stats.event_id -> events.id {
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+match_timeline.event_id -> events.id {
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+}
+odds_snapshots.event_id -> events.id {
+  style.stroke: "#EA580C"
+  style.stroke-width: 2
+}
+
+v_matches -> events: view {
+  style.stroke-dash: 5
+  style.stroke: "#3B82F6"
+}
+v_goal_timeline -> match_timeline: view {
+  style.stroke-dash: 5
+  style.stroke: "#CA8A04"
+}
+
+match_stats -> c_stats
+match_timeline -> c_timeline
+odds_snapshots -> c_odds
+conversation_sessions -> c_conv

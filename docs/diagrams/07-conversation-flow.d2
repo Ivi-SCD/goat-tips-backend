@@ -1,0 +1,177 @@
+title: "Goat Tips — Fluxo: Histórico de Conversa (/predictions/{id}/ask)" {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+direction: down
+
+# ─────────────────────────────────────────────
+# ENTRADAS
+# ─────────────────────────────────────────────
+post_ask: "POST /predictions/{event_id}/ask" {
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+  style.border-radius: 8
+  style.bold: true
+
+  body: "Body: { question: ... }\nQuery: ?session_id=<uuid>" {
+    shape: text
+    style.font-size: 12
+    style.font-color: "#1D4ED8"
+  }
+}
+
+session_note: O frontend gera um UUID como session_id\ne o reutiliza entre perguntas do mesmo jogo {
+  shape: text
+  style.font-size: 12
+  style.font-color: "#6B7280"
+  style.italic: true
+}
+
+# ─────────────────────────────────────────────
+# LOAD HISTORY
+# ─────────────────────────────────────────────
+load_hist: load_history(session_id, event_id) {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.border-radius: 8
+}
+
+supabase_read: Supabase — conversation_sessions\nSELECT messages JSONB\nWHERE session_id = ? AND event_id = ? {
+  shape: cylinder
+  icon: https://cdn.simpleicons.org/supabase/3ECF8E
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+
+check_hist: Sessão existe? {
+  shape: diamond
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+}
+
+empty_hist: Retorna lista vazia\n(primeiro turno) {
+  style.fill: "#F1F5F9"
+  style.stroke: "#94A3B8"
+  style.border-radius: 6
+}
+
+slice_hist: Retorna últimos 6 pares\n(12 mensagens — janela deslizante) {
+  style.fill: "#A7F3D0"
+  style.stroke: "#059669"
+  style.border-radius: 6
+}
+
+# ─────────────────────────────────────────────
+# BUILD + CALL LLM
+# ─────────────────────────────────────────────
+build_ctx: "_build_context_prompt(match)\n+ injeção do histórico como\nmessages[{role, content}, …]" {
+  style.fill: "#FFF7ED"
+  style.stroke: "#EA580C"
+  style.stroke-width: 2
+  style.border-radius: 8
+}
+
+groq: "Groq — moonshotai/kimi-k2-instruct\nchat.completions.create(\n  messages=[system, …history, user]\n)" {
+  shape: cloud
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+}
+
+narrative_resp: "NarrativeResponse\n{ headline, analysis, prediction,\n  momentum_signal, confidence_label }" {
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.border-radius: 8
+}
+
+# ─────────────────────────────────────────────
+# SAVE TURN
+# ─────────────────────────────────────────────
+save_turn: save_turn(session_id, event_id,\nquestion, headline, analysis) {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.border-radius: 8
+}
+
+supabase_write: Supabase — conversation_sessions\nINSERT ... ON CONFLICT DO UPDATE\nmessages = messages || novo_par {
+  shape: cylinder
+  icon: https://cdn.simpleicons.org/supabase/3ECF8E
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+
+max_note: Se > 6 pares: descarta os mais antigos\n(sem sumarização — janela fixa) {
+  shape: text
+  style.font-size: 12
+  style.font-color: "#6B7280"
+  style.italic: true
+}
+
+# ─────────────────────────────────────────────
+# RESPOSTA
+# ─────────────────────────────────────────────
+response_ok: 200 OK — NarrativeResponse {
+  style.fill: "#DCFCE7"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.border-radius: 8
+  style.bold: true
+}
+
+# ─────────────────────────────────────────────
+# LIMPAR HISTÓRICO
+# ─────────────────────────────────────────────
+delete_hist: "DELETE /predictions/{id}/ask/history\n?session_id=<uuid>" {
+  style.fill: "#FEE2E2"
+  style.stroke: "#DC2626"
+  style.stroke-width: 2
+  style.border-radius: 8
+}
+
+clear: clear_session(session_id, event_id)\nDELETE FROM conversation_sessions {
+  shape: cylinder
+  icon: https://cdn.simpleicons.org/supabase/3ECF8E
+  style.fill: "#FEE2E2"
+  style.stroke: "#DC2626"
+}
+
+delete_ok: 204 No Content {
+  style.fill: "#F1F5F9"
+  style.stroke: "#94A3B8"
+  style.border-radius: 6
+}
+
+# ─────────────────────────────────────────────
+# FLUXO PRINCIPAL
+# ─────────────────────────────────────────────
+post_ask -> session_note
+post_ask -> load_hist
+load_hist -> supabase_read -> check_hist
+
+check_hist -> empty_hist: Não existe {
+  style.stroke: "#94A3B8"
+}
+check_hist -> slice_hist: Existe {
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+
+empty_hist -> build_ctx
+slice_hist -> build_ctx
+
+build_ctx -> groq -> narrative_resp -> save_turn
+save_turn -> supabase_write -> max_note
+save_turn -> response_ok
+
+# ─────────────────────────────────────────────
+# FLUXO LIMPEZA
+# ─────────────────────────────────────────────
+delete_hist -> clear -> delete_ok

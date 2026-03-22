@@ -1,0 +1,71 @@
+title: Goat Tips — Casos de Uso: Módulo /matches {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+user: Frontend\n(Usuário / App) {
+  shape: person
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+  style.font-size: 12
+}
+
+system: Goat Tips API — /matches {
+  style.fill: "#F8FAFC"
+  style.stroke: "#1E293B"
+  style.stroke-width: 3
+  style.border-radius: 14
+
+  uc1: "Ver partidas ao vivo\n(placar, odds, probs, momentum)" {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc2: "Ver próximas partidas\n(kick-off, árbitro, estádio)" {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc3: "Ver contexto completo\nde uma partida" {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc4: "Ver H2H em tempo real\n(BetsAPI, 10 jogos)" {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc5: "Ver momentum tático\npor período" {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc6: "Ver escalações\n(XI + banco)" {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc7: "Ver artilheiros e\nassistências da liga" {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+}
+
+user -> system.uc1
+user -> system.uc2
+user -> system.uc3
+user -> system.uc4
+user -> system.uc5
+user -> system.uc6
+user -> system.uc7

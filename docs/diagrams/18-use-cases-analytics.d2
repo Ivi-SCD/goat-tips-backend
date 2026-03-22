@@ -1,0 +1,72 @@
+title: Goat Tips — Casos de Uso: Módulo /analytics {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+user: Frontend\n(Usuário / App) {
+  shape: person
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+  style.font-size: 14
+}
+
+system: Goat Tips API — /analytics {
+  style.fill: "#F8FAFC"
+  style.stroke: "#1E293B"
+  style.stroke-width: 3
+  style.border-radius: 14
+
+  uc15: "Listar times do dataset\n(35 times, 2014–2026)" {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc16: "Ver forma recente\nde um time (últimos N jogos)" {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc17: "Ver estatísticas\naggregadas de um time" {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc18: "Ver H2H histórico\n(4 585 jogos)" {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc19: "Ver distribuição de gols\npor minuto (9 508 gols)" {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc20: "Ver distribuição de cartões\npor minuto (11 391 cartões)" {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc21: "Calcular risk scores\n(gol + cartão, próximos 15 min)" {
+    style.fill: "#A7F3D0"
+    style.stroke: "#059669"
+    style.border-radius: 6
+    style.font-size: 12
+    style.bold: true
+  }
+}
+
+user -> system.uc15
+user -> system.uc16
+user -> system.uc17
+user -> system.uc18
+user -> system.uc19
+user -> system.uc20
+user -> system.uc21

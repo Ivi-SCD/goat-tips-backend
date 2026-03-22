@@ -1,0 +1,184 @@
+title: Goat Tips — Arquitetura do Sistema {
+  near: top-center
+  style.font-size: 24
+  style.bold: true
+}
+
+direction: right
+
+# ─────────────────────────────────────────────
+# CLIENTE
+# ─────────────────────────────────────────────
+client: Frontend\n(polling) {
+  shape: rectangle
+  icon: https://cdn.simpleicons.org/googlechrome/4285F4
+  style.fill: "#EFF6FF"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+# ─────────────────────────────────────────────
+# IBM CODE ENGINE
+# ─────────────────────────────────────────────
+ce: IBM Code Engine — us-east {
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Networking/IBM%20Cloud%20.svg
+  style.fill: "#EEF2FF"
+  style.stroke: "#0F62FE"
+  style.stroke-width: 2
+  style.border-radius: 12
+
+  api: goat-tips-backend-api {
+    icon: https://cdn.simpleicons.org/fastapi/009485
+    style.fill: "#E0FFF8"
+    style.stroke: "#009485"
+    style.stroke-width: 2
+    style.border-radius: 8
+    style.font-size: 14
+
+    routers: Routers\n/matches · /predictions · /analytics {
+      style.fill: "#DBEAFE"
+      style.stroke: "#3B82F6"
+      style.border-radius: 6
+    }
+    agent: Agente LangGraph {
+      style.fill: "#EDE9FE"
+      style.stroke: "#7C3AED"
+      style.border-radius: 6
+    }
+    predictor: Modelo Poisson\n(Dixon-Coles) {
+      style.fill: "#FEF3C7"
+      style.stroke: "#D97706"
+      style.border-radius: 6
+    }
+    routers -> agent
+    routers -> predictor
+  }
+
+  sync: goat-tips-daily-sync\n⏰  0 3 * * * UTC {
+    icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/DevOps/Serverless%20Application.svg
+    style.fill: "#DBEAFE"
+    style.stroke: "#0F62FE"
+    style.stroke-width: 1
+    style.border-radius: 8
+    style.font-size: 13
+  }
+
+  retrain: goat-tips-retrain\n⏰  0 3 * * 1 UTC {
+    icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/DevOps/Serverless%20Application.svg
+    style.fill: "#DBEAFE"
+    style.stroke: "#0F62FE"
+    style.stroke-width: 1
+    style.border-radius: 8
+    style.font-size: 13
+  }
+}
+
+# ─────────────────────────────────────────────
+# IBM CONTAINER REGISTRY
+# ─────────────────────────────────────────────
+icr: IBM Container Registry\nicr.io/goat-tips-ns {
+  shape: package
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Compute/Cloud%20Registry.svg
+  style.fill: "#EEF2FF"
+  style.stroke: "#0F62FE"
+  style.stroke-width: 2
+  style.border-radius: 8
+}
+
+# ─────────────────────────────────────────────
+# SERVIÇOS EXTERNOS
+# ─────────────────────────────────────────────
+betsapi: BetsAPI\n(dados em tempo real) {
+  shape: cloud
+  style.fill: "#FFFBEB"
+  style.stroke: "#D97706"
+  style.stroke-width: 2
+  style.font-size: 14
+}
+
+groq: Groq API\nmoonshotai/kimi-k2-instruct\n131K ctx · 1T MoE {
+  shape: cloud
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+  style.font-size: 14
+}
+
+supabase: Supabase PostgreSQL\nus-west-2\n4585 jogos · 86K stats · 229K timeline {
+  shape: cylinder
+  icon: https://cdn.simpleicons.org/supabase/3ECF8E
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.font-size: 13
+}
+
+cos: IBM Cloud Object Storage\ngoat-tips-bucket\npoisson_model.pkl {
+  shape: stored_data
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Data%20%26%20Storage/Object%20Bucket.svg
+  style.fill: "#EEF2FF"
+  style.stroke: "#4F46E5"
+  style.stroke-width: 2
+  style.font-size: 13
+}
+
+# ─────────────────────────────────────────────
+# CONEXÕES
+# ─────────────────────────────────────────────
+client -> ce.api: HTTPS polling {
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+}
+
+ce.api.routers -> betsapi: httpx async\n(tempo real) {
+  style.stroke: "#D97706"
+  style.stroke-width: 2
+}
+
+ce.api.agent -> groq: OpenAI-compat SDK\n(narrativa PT-BR) {
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+}
+
+ce.api -> supabase: asyncpg\n(chat history + queries) {
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+
+ce.api.predictor -> cos: boto3 / s3\n(download pkl) {
+  style.stroke: "#4F46E5"
+  style.stroke-width: 1
+  style.stroke-dash: 5
+}
+
+ce.sync -> betsapi: fetch novos jogos {
+  style.stroke: "#D97706"
+  style.stroke-width: 1
+  style.stroke-dash: 4
+}
+
+ce.sync -> supabase: upsert events\n+ stats + timeline {
+  style.stroke: "#16A34A"
+  style.stroke-width: 1
+  style.stroke-dash: 4
+}
+
+ce.retrain -> supabase: load training data {
+  style.stroke: "#16A34A"
+  style.stroke-width: 1
+  style.stroke-dash: 4
+}
+
+ce.retrain -> cos: upload\npoisson_model.pkl {
+  style.stroke: "#4F46E5"
+  style.stroke-width: 1
+  style.stroke-dash: 4
+}
+
+icr -> ce: Docker images {
+  style.stroke: "#0F62FE"
+  style.stroke-width: 1
+  style.stroke-dash: 3
+}

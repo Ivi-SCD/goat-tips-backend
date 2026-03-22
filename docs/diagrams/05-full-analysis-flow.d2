@@ -1,0 +1,202 @@
+title: "Goat Tips — Fluxo: Full Analysis (/predictions/{id}/full-analysis)" {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+direction: down
+
+# ─────────────────────────────────────────────
+# ENTRADA
+# ─────────────────────────────────────────────
+start: "GET /predictions/{event_id}/full-analysis" {
+  shape: rectangle
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 3
+  style.border-radius: 8
+  style.font-size: 15
+  style.bold: true
+}
+
+init: "Inicializa AgentState\n{event_id, erros: [], steps: []}" {
+  style.fill: "#EFF6FF"
+  style.stroke: "#3B82F6"
+  style.border-radius: 6
+}
+
+# ─────────────────────────────────────────────
+# NÓ 1 — FETCH CONTEXT
+# ─────────────────────────────────────────────
+node1: Nó 1 — fetch_context_node {
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 3
+  style.border-radius: 10
+
+  gather: asyncio.gather (paralelo) {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 8
+
+    g1: get_match_by_id(event_id)\n→ placar · odds · árbitro · estádio {
+      style.fill: "#DDD6FE"
+      style.stroke: "#7C3AED"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+    g2: get_h2h(event_id)\n→ 10 confrontos diretos {
+      style.fill: "#DDD6FE"
+      style.stroke: "#7C3AED"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+    g3: get_stats_trend(event_id)\n→ momentum tático por período {
+      style.fill: "#DDD6FE"
+      style.stroke: "#7C3AED"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+    g4: get_lineup(event_id)\n→ escalação XI + banco {
+      style.fill: "#DDD6FE"
+      style.stroke: "#7C3AED"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+  }
+
+  err1: "errors[] registra falhas\nsem parar o pipeline" {
+    style.fill: "#FEE2E2"
+    style.stroke: "#DC2626"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+}
+
+# ─────────────────────────────────────────────
+# NÓ 2 — FETCH HISTORICAL
+# ─────────────────────────────────────────────
+node2: Nó 2 — fetch_historical_node {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 3
+  style.border-radius: 10
+
+  thread: asyncio.to_thread (não bloqueia event loop) {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 8
+
+    t1: get_team_form(home, 10)\n→ últimos 10 jogos mandante {
+      style.fill: "#A7F3D0"
+      style.stroke: "#059669"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+    t2: get_team_form(away, 10)\n→ últimos 10 jogos visitante {
+      style.fill: "#A7F3D0"
+      style.stroke: "#059669"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+    t3: predict_from_match_context()\n→ Poisson: λ, placares, probs {
+      style.fill: "#A7F3D0"
+      style.stroke: "#059669"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+    t4: calculate_goal_risk_score()\n→ float 0–10 {
+      style.fill: "#A7F3D0"
+      style.stroke: "#059669"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+    t5: calculate_card_risk_score()\n→ float 0–10 {
+      style.fill: "#A7F3D0"
+      style.stroke: "#059669"
+      style.border-radius: 6
+      style.font-size: 12
+    }
+  }
+}
+
+# ─────────────────────────────────────────────
+# NÓ 3 — GENERATE NARRATIVE
+# ─────────────────────────────────────────────
+node3: Nó 3 — generate_narrative_node {
+  style.fill: "#FFF7ED"
+  style.stroke: "#EA580C"
+  style.stroke-width: 3
+  style.border-radius: 10
+
+  ctx: generate_narrative_enriched()\nMonta contexto enriquecido {
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.border-radius: 8
+    style.font-size: 12
+  }
+
+  prompt: Contexto injetado no prompt:\nmatch + h2h + form + stats_trend\n+ prediction + risk_scores {
+    style.fill: "#FFEDD5"
+    style.stroke: "#EA580C"
+    style.border-radius: 6
+    style.font-size: 11
+  }
+
+  groq: Groq LLM\nmoonshotai/kimi-k2-instruct {
+    shape: cloud
+    style.fill: "#F5F3FF"
+    style.stroke: "#7C3AED"
+    style.stroke-width: 2
+  }
+
+  out: NarrativeResponse (JSON)\nheadline · analysis · prediction\nmomentum_signal · confidence_label {
+    style.fill: "#FEF3C7"
+    style.stroke: "#D97706"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+
+  ctx -> prompt -> groq -> out
+}
+
+# ─────────────────────────────────────────────
+# SAÍDA
+# ─────────────────────────────────────────────
+response: FullMatchAnalysis (JSON) {
+  style.fill: "#DCFCE7"
+  style.stroke: "#16A34A"
+  style.stroke-width: 3
+  style.border-radius: 10
+
+  fields: match · narrative · prediction\nh2h · stats_trend · lineup\nhome_form · away_form\ngoal_risk_score · card_risk_score\nagent_steps {
+    shape: text
+    style.font-size: 13
+    style.font-color: "#166534"
+  }
+}
+
+latency: ⏱ Latência típica: 5–15s {
+  shape: text
+  style.font-size: 13
+  style.font-color: "#6B7280"
+  style.italic: true
+}
+
+# ─────────────────────────────────────────────
+# FLUXO
+# ─────────────────────────────────────────────
+start -> init -> node1
+node1 -> node2: state com match, h2h,\nstats_trend, lineup {
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+}
+node2 -> node3: state + home_form, away_form,\nprediction, risk_scores {
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+node3 -> response: state final {
+  style.stroke: "#EA580C"
+  style.stroke-width: 2
+}
+response -> latency

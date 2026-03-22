@@ -1,0 +1,77 @@
+title: Goat Tips — Casos de Uso: Módulo /predictions {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+user: Frontend\n(Usuário / App) {
+  shape: person
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+  style.font-size: 14
+}
+
+system: Goat Tips API — /predictions {
+  style.fill: "#F8FAFC"
+  style.stroke: "#1E293B"
+  style.stroke-width: 3
+  style.border-radius: 14
+
+  uc8: "Prever partida por\nnomes dos times (Poisson)" {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc9: "Prever partida via\nevent_id (Poisson)" {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc10: "Análise completa\n(LangGraph + LLM)" {
+    style.fill: "#DDD6FE"
+    style.stroke: "#7C3AED"
+    style.stroke-width: 2
+    style.border-radius: 6
+    style.font-size: 12
+    style.bold: true
+  }
+  uc11: "Gerar narrativa simples\n(LLM sem agente)" {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc12: "Fazer pergunta livre\nsobre a partida" {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc13: "Continuar conversa\n(com histórico de sessão)" {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc14: "Limpar histórico\nde sessão" {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+
+  uc12 -> uc13: "<<extend>>" {
+    style.stroke-dash: 5
+    style.stroke: "#7C3AED"
+  }
+}
+
+user -> system.uc8
+user -> system.uc9
+user -> system.uc10
+user -> system.uc11
+user -> system.uc12
+user -> system.uc14
