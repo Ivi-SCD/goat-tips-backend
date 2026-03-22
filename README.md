@@ -2,9 +2,9 @@
 
 > Análise narrativa e preditiva de partidas da Premier League em tempo real.
 
-Combina dados ao vivo da BetsAPI, um modelo estatístico Poisson treinado em **4,495 jogos históricos** e LLM (Azure OpenAI GPT-4.1) para entregar interpretações contextualizadas em Português — não apenas números brutos.
+Combina dados ao vivo da BetsAPI, um modelo estatístico Poisson treinado em **4,495 jogos históricos** e LLM (Groq — moonshotai/kimi-k2-instruct) para entregar interpretações contextualizadas em Português — não apenas números brutos.
 
-**API ao vivo:** `http://4.157.187.122:8000` · **Docs interativos:** `http://4.157.187.122:8000/docs`
+**API ao vivo:** `https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud` · **Docs interativos:** `.../docs`
 
 ---
 
@@ -14,18 +14,19 @@ Combina dados ao vivo da BetsAPI, um modelo estatístico Poisson treinado em **4
 Frontend (polling)
      │
      ▼
-FastAPI — Azure Container Instance (goat-tips-api)
+FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
      ├── /matches      → BetsAPI tempo real: ao vivo, upcoming, H2H, stats, lineup
-     ├── /predictions  → Modelo Poisson + Agente LangGraph + GPT-4.1
+     ├── /predictions  → Modelo Poisson + Agente LangGraph + Groq LLM
      └── /analytics    → Dataset histórico: 4,585 jogos, 86K stats, 229K eventos
           │
           ├── app/routers/          # Camada HTTP
           ├── app/services/
           │   ├── betsapi.py        # Cliente BetsAPI async (httpx)
-          │   ├── predictor.py      # Modelo Poisson (Dixon-Coles)
+          │   ├── predictor.py      # Modelo Poisson (Dixon-Coles) + fallback IBM COS
           │   ├── analytics.py      # Business logic histórico
           │   ├── narrative.py      # Geração de narrativa LLM
-          │   └── llm_client.py     # Azure OpenAI client singleton
+          │   ├── llm_client.py     # Groq client singleton (openai SDK)
+          │   └── conversation.py   # Histórico de sessão no Supabase (JSONB)
           ├── app/repositories/
           │   ├── historical.py     # CSVs → pandas in-memory (lru_cache)
           │   └── database.py       # Supabase async (asyncpg)
@@ -35,16 +36,17 @@ FastAPI — Azure Container Instance (goat-tips-api)
           └── app/schemas/          # Pydantic schemas por domínio
 ```
 
-### Infraestrutura Azure
+### Infraestrutura IBM Cloud
 
 | Recurso | Tipo | Função |
 |---|---|---|
-| `goat-tips-api` | Container Instance | API FastAPI — porta 8000 |
-| `goat-tips-azr-func-daily-update` | Function App Flex | Sync diário BetsAPI → Supabase, 03:00 UTC |
-| `goattips889c` | Storage Account | Artefato do modelo (`models/poisson_model.pkl`) |
-| `goattipsacr` | Container Registry | Imagem Docker `goattips-backend-api:latest` |
-| `goat-tips-ai-frs` | Azure OpenAI | GPT-4.1 — narrativas em Português |
-| Supabase (us-west-2) | PostgreSQL | 4,585 jogos · 86K stats · 229K timeline · 20K odds |
+| `goat-tips-backend-api` | Code Engine Application (us-east) | API FastAPI — HTTPS público |
+| `goat-tips-daily-sync` | Code Engine Job | Sync diário BetsAPI → Supabase, `0 3 * * *` UTC |
+| `goat-tips-retrain` | Code Engine Job | Retreinamento do modelo, `0 3 * * 1` (toda segunda) |
+| `icr.io/goat-tips-ns` | IBM Container Registry (global) | Imagens Docker das 3 aplicações |
+| `goat-tips-bucket` | IBM Cloud Object Storage (us-south) | Artefato do modelo (`poisson_model.pkl`) |
+| Groq API | LLM (moonshotai/kimi-k2-instruct) | Narrativas em Português — 131K contexto, 1T MoE |
+| Supabase (us-west-2) | PostgreSQL | 4,585 jogos · 86K stats · 229K timeline · 20K odds · histórico de chat |
 
 ---
 
@@ -84,7 +86,7 @@ Os 4.5M de linhas são uma série temporal de odds (cada mudança de cotação a
 
 ### Supabase como camada de persistência
 
-O Supabase (PostgreSQL) armazena os dados históricos e os novos jogos sincronizados diariamente pelo Azure Function. A camada `app/repositories/historical.py` é isolada como o único ponto de acesso aos dados históricos — para migrar de CSV para Supabase basta substituir as funções nesse arquivo sem tocar em services ou routers.
+O Supabase (PostgreSQL) armazena os dados históricos, os novos jogos sincronizados diariamente pelo CE Job e o histórico de conversas dos usuários. A camada `app/repositories/historical.py` é isolada como o único ponto de acesso aos dados históricos.
 
 **Tabelas:**
 
@@ -95,7 +97,8 @@ O Supabase (PostgreSQL) armazena os dados históricos e os novos jogos sincroniz
 | `match_stats` | 86,554 | Stats por métrica e período |
 | `match_timeline` | 229,549 | Gols e cartões com minuto |
 | `odds_snapshots` | 20,092 | Odds de fechamento por partida e mercado |
-| `sync_log` | — | Histórico de execuções do Azure Function |
+| `sync_log` | — | Histórico de execuções do CE Job diário |
+| `conversation_sessions` | — | Histórico de chat por `(session_id, event_id)` — JSONB |
 
 **Views úteis:**
 - `v_matches` — join completo com nomes dos times
@@ -134,17 +137,17 @@ P(placar = i-j) = Poisson(λ_home, i) × Poisson(λ_away, j)
 
 ### Ciclo de retreinamento
 
-O modelo é re-treinado toda segunda-feira às 03:00 UTC por um **Azure Container Apps Job** (`retrain/`). O job:
-1. Puxa os jogos encerrados do Supabase (sempre atualizado pelo Azure Function)
+O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine Job** (`goat-tips-retrain`). O job:
+1. Puxa os jogos encerrados do Supabase (sempre atualizado pelo job diário)
 2. Re-calcula as forças de ataque e defesa de todos os times
-3. Serializa com `joblib` e faz upload para Azure Blob Storage (`goattips889c/models/poisson_model.pkl`)
+3. Serializa com `joblib` e faz upload para IBM COS (`goat-tips-bucket/poisson_model.pkl`)
 4. Na próxima requisição, o `predictor.py` baixa o novo pkl automaticamente
 
 ### Fallback em cadeia do predictor
 
 ```
 1. Carrega models/poisson_model.pkl local (mais rápido)
-2. Tenta download do Azure Blob Storage (quando não tem pkl local)
+2. Tenta download do IBM COS (quando não tem pkl local)
 3. Treina inline a partir do CSV (último recurso)
 ```
 
@@ -171,13 +174,28 @@ fetch_historical ─────────────────────
     └── calculate_card_risk_score()  → risco de cartão
                     │
 generate_narrative ─────────────────────────────────────────────
-  Azure OpenAI GPT-4.1 (~600 tokens de contexto):
+  Groq (moonshotai/kimi-k2-instruct — 131K contexto):
     → headline + analysis + prediction + momentum_signal
     → resposta sempre em Português
 ```
 
 **Por que `asyncio.gather` dentro de um único nó e não nós paralelos no LangGraph?**
 O LangGraph suporta fan-out nativo mas adiciona overhead de serialização de estado. Para 4 chamadas I/O que retornam em ~2s, `asyncio.gather` dentro do nó é mais simples e igualmente eficiente.
+
+---
+
+## Histórico de Conversa
+
+O endpoint `/predictions/{id}/ask` suporta histórico de conversa por sessão, armazenado no Supabase.
+
+**Como funciona:**
+1. O frontend gera um UUID como `session_id` e o reutiliza entre perguntas do mesmo jogo
+2. Cada pergunta/resposta é armazenada como par `user/assistant` em `conversation_sessions`
+3. Os últimos **6 pares** (12 mensagens) são injetados no contexto do LLM a cada nova pergunta
+4. Para limpar o histórico, use `DELETE /predictions/{id}/ask/history?session_id=<uuid>`
+
+**Por que 6 pares?**
+Típico de uma sessão de análise de partida (< 10 perguntas). A janela deslizante descarta pares mais antigos silenciosamente — sem sumarização necessária para esse volume.
 
 ---
 
@@ -190,10 +208,12 @@ pip install -r requirements.txt
 
 # Configure variáveis de ambiente
 cp .env.example .env
-# BETSAPI_TOKEN, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY,
-# SUPABASE_DB_URL, AZURE_STORAGE_CONNECTION_STRING
+# BETSAPI_TOKEN, GROQ_API_KEY, GROQ_MODEL,
+# SUPABASE_DB_URL, SUPABASE_DB_URL_ASYNC,
+# IBM_COS_ACCESS_KEY_ID, IBM_COS_SECRET_ACCESS_KEY,
+# IBM_COS_ENDPOINT, IBM_COS_BUCKET
 
-# Treina o modelo (ou baixa do Blob automaticamente na 1ª requisição)
+# Treina o modelo (ou baixa do IBM COS automaticamente na 1ª requisição)
 python scripts/train_model.py
 
 # Servidor local
@@ -204,48 +224,55 @@ uvicorn app.main:app --reload --port 8000
 
 ## Deploy (CLI)
 
-### API (Container Instance)
+### API (IBM Code Engine)
 
 ```bash
-# 1. Build e push da imagem
-docker build -t goattipsacr.azurecr.io/goattips-backend-api:latest .
-az acr login --name goattipsacr
-docker push goattipsacr.azurecr.io/goattips-backend-api:latest
+# 1. Login e target
+ibmcloud login
+ibmcloud target -r us-east -g Default
+ibmcloud ce project select --name goat-tips-proj
 
-# 2. Recriar o container com a nova imagem
-az container delete --name goat-tips-api --resource-group goat-tips --yes
-az container create \
-  --name goat-tips-api \
-  --resource-group goat-tips \
-  --image goattipsacr.azurecr.io/goattips-backend-api:latest \
-  --registry-login-server goattipsacr.azurecr.io \
-  --registry-username goattipsacr \
-  --registry-password <ACR_PASSWORD> \
-  --cpu 1 --memory 2 \
-  --ports 8000 --ip-address Public \
-  --environment-variables \
-    BETSAPI_TOKEN=<token> \
-    AZURE_OPENAI_ENDPOINT=<endpoint> \
-    AZURE_OPENAI_API_KEY=<key> \
-    AZURE_OPENAI_MODEL=gpt-4.1 \
-    SUPABASE_DB_URL=<url> \
-    AZURE_STORAGE_CONTAINER=models \
-    MODEL_BLOB_NAME=poisson_model.pkl \
-    PREMIER_LEAGUE_ID=94 \
-  --secure-environment-variables \
-    AZURE_STORAGE_CONNECTION_STRING=<conn_str>
+# 2. Build e push da imagem
+ibmcloud cr login
+docker build --network host -t icr.io/goat-tips-ns/goat-tips-backend:latest .
+docker push icr.io/goat-tips-ns/goat-tips-backend:latest
+
+# 3. Criar ou atualizar a aplicação
+ibmcloud ce application update --name goat-tips-backend-api \
+  --image icr.io/goat-tips-ns/goat-tips-backend:latest \
+  --registry-secret icr-global-secret \
+  --env BETSAPI_TOKEN=<token> \
+  --env GROQ_API_KEY=<key> \
+  --env GROQ_MODEL=moonshotai/kimi-k2-instruct \
+  --env SUPABASE_DB_URL=<url> \
+  --env SUPABASE_DB_URL_ASYNC=<async_url> \
+  --env IBM_COS_ACCESS_KEY_ID=<key_id> \
+  --env IBM_COS_SECRET_ACCESS_KEY=<secret> \
+  --env IBM_COS_ENDPOINT=https://s3.us-south.cloud-object-storage.appdomain.cloud \
+  --env IBM_COS_BUCKET=goat-tips-bucket
 ```
 
-### Azure Function (daily sync)
+### CE Jobs (daily sync + retrain)
 
 ```bash
-cd azure_functions
-zip -r ../azure_functions.zip . \
-  --exclude "*.pyc" --exclude "*/__pycache__/*" \
-  --exclude "local.settings.json" --exclude "*.zip"
+# Daily sync (já criado — atualizar imagem se necessário)
+docker build --network host -t icr.io/goat-tips-ns/goat-tips-daily-sync:latest jobs/daily_sync/
+docker push icr.io/goat-tips-ns/goat-tips-daily-sync:latest
+ibmcloud ce job update --name goat-tips-daily-sync \
+  --image icr.io/goat-tips-ns/goat-tips-daily-sync:latest
 
-# Deploy via Flex Consumption (requer func CLI v4+)
-func azure functionapp publish goat-tips-azr-func-daily-update
+# Retrain (já criado — atualizar imagem se necessário)
+docker build --network host -t icr.io/goat-tips-ns/goat-tips-retrain:latest retrain/
+docker push icr.io/goat-tips-ns/goat-tips-retrain:latest
+ibmcloud ce job update --name goat-tips-retrain \
+  --image icr.io/goat-tips-ns/goat-tips-retrain:latest
+
+# Execução manual
+ibmcloud ce jobrun submit --job goat-tips-daily-sync
+ibmcloud ce jobrun submit --job goat-tips-retrain
+
+# Ver logs de uma execução
+ibmcloud ce jobrun logs --name <jobrun-name>
 ```
 
 ### Migração de dados
@@ -253,6 +280,7 @@ func azure functionapp publish goat-tips-azr-func-daily-update
 ```bash
 # Aplique o schema no Supabase SQL editor:
 sql/schema.sql
+sql/conversation_sessions.sql
 
 # Migre os CSVs para o Supabase (idempotente):
 python scripts/migrate_csv_to_db.py
@@ -285,7 +313,8 @@ python scripts/train_model.py
 | GET | `/predictions/{id}` | Previsão Poisson via event_id |
 | GET | `/predictions/{id}/full-analysis` | **Análise completa — agente LangGraph** |
 | POST | `/predictions/{id}/narrative` | Narrativa LLM simples |
-| POST | `/predictions/{id}/ask` | Pergunta livre sobre a partida |
+| POST | `/predictions/{id}/ask` | Pergunta livre — aceita `?session_id=` para histórico |
+| DELETE | `/predictions/{id}/ask/history` | Limpa histórico de sessão (`?session_id=` obrigatório) |
 
 ### `/analytics` — Dataset histórico
 
@@ -320,22 +349,29 @@ edscript/
 │   ├── schemas/             # match / prediction / analytics / agent
 │   └── services/
 │       ├── betsapi.py       # Cliente BetsAPI async — todos os endpoints
-│       ├── llm_client.py    # Azure OpenAI singleton + SYSTEM_PROMPT
+│       ├── llm_client.py    # Groq client singleton + SYSTEM_PROMPT
 │       ├── narrative.py     # Contexto enriquecido + chamada LLM
-│       ├── predictor.py     # Poisson + fallback Blob + fallback inline
-│       └── analytics.py     # Lógica analytics histórico
-├── azure_functions/         # Daily sync — Flex Consumption
-│   ├── function_app.py      # Python v2: timer + HTTP trigger
-│   └── sync_logic.py        # Fetch BetsAPI + upsert Supabase (psycopg2)
-├── retrain/                 # Retreinamento semanal — Container Apps Job
-│   ├── retrain.py           # Puxa Supabase → treina → upload Blob
+│       ├── predictor.py     # Poisson + fallback IBM COS + fallback inline
+│       ├── analytics.py     # Lógica analytics histórico
+│       └── conversation.py  # Histórico de chat por sessão (Supabase JSONB)
+├── jobs/
+│   └── daily_sync/          # CE Job — sync diário BetsAPI → Supabase
+│       ├── daily_sync.py    # Entrypoint IBM Code Engine
+│       ├── sync_logic.py    # Fetch BetsAPI + upsert Supabase (psycopg2)
+│       ├── Dockerfile
+│       └── requirements.txt
+├── retrain/                 # CE Job — retreinamento semanal
+│   ├── retrain.py           # Puxa Supabase → treina → upload IBM COS
 │   ├── Dockerfile
-│   └── deploy.sh            # az containerapp job create
+│   └── requirements.txt
 ├── scripts/
 │   ├── train_model.py       # Treina e serializa o modelo localmente
 │   ├── migrate_csv_to_db.py # Migra CSVs → Supabase (idempotente)
+│   ├── deploy-code-engine.sh # Deploy completo da API no Code Engine
 │   └── test_routes.py       # Testa todos os endpoints com rich output
-├── sql/schema.sql           # Schema Supabase completo (6 tabelas + views)
+├── sql/
+│   ├── schema.sql                   # Schema Supabase completo (6 tabelas + views)
+│   └── conversation_sessions.sql    # Tabela de histórico de chat
 ├── docs/guia-api.md         # Guia de consumo da API em Português
 ├── Dockerfile               # Imagem da API principal
 ├── .dockerignore            # Exclui odds timeseries (563 MB)

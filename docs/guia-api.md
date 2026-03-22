@@ -1,6 +1,7 @@
 # Guia de Uso da API — Goat Tips Premier League AI
 
-> Versão 0.3.0 | Base URL: `http://4.157.187.122:8000` · Docs interativos: `http://4.157.187.122:8000/docs`
+> Versão 0.4.0 | Base URL: `https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud`
+> Docs interativos: `.../docs`
 
 Este guia explica como consumir cada endpoint da Goat Tips API, com exemplos de requisição, resposta e casos de uso para o frontend.
 
@@ -27,14 +28,14 @@ A Goat Tips API possui três módulos:
 | Prefixo | Dados | Latência típica |
 |---------|-------|-----------------|
 | `/matches` | BetsAPI (real-time) | 0.3–5 s |
-| `/predictions` | Modelo Poisson + LLM | 1–15 s |
+| `/predictions` | Modelo Poisson + LLM (Groq) | 1–15 s |
 | `/analytics` | Dataset histórico (4,585 jogos) | <50 ms (cacheado) |
 
 ---
 
 ## Autenticação
 
-Nenhuma autenticação é necessária para consumir a API. As chaves de terceiros (BetsAPI, Azure OpenAI) ficam no servidor.
+Nenhuma autenticação é necessária para consumir a API. As chaves de terceiros (BetsAPI, Groq) ficam no servidor.
 
 ---
 
@@ -47,7 +48,8 @@ Retorna todas as partidas da Premier League ao vivo.
 **Quando usar:** Para o painel principal "ao vivo". Faça polling a cada **30 segundos**.
 
 ```bash
-curl http://4.157.187.122:8000/matches/live
+BASE=https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud
+curl $BASE/matches/live
 ```
 
 **Resposta:**
@@ -86,7 +88,7 @@ Retorna as próximas partidas da liga.
 **Quando usar:** Para a tela de "próximos jogos". Atualize a cada **5 minutos**.
 
 ```bash
-curl http://4.157.187.122:8000/matches/upcoming
+curl $BASE/matches/upcoming
 ```
 
 **Resposta (mesmo formato do live, com diferenças):**
@@ -118,7 +120,7 @@ curl http://4.157.187.122:8000/matches/upcoming
 Contexto completo de uma partida específica.
 
 ```bash
-curl http://4.157.187.122:8000/matches/11545080
+curl $BASE/matches/11545080
 ```
 
 ---
@@ -128,7 +130,7 @@ curl http://4.157.187.122:8000/matches/11545080
 Histórico de confrontos diretos via BetsAPI.
 
 ```bash
-curl http://4.157.187.122:8000/matches/11545080/h2h
+curl $BASE/matches/11545080/h2h
 ```
 
 **Resposta:**
@@ -163,7 +165,7 @@ curl http://4.157.187.122:8000/matches/11545080/h2h
 Estatísticas táticas por período, com score de momentum.
 
 ```bash
-curl http://4.157.187.122:8000/matches/12345678/stats-trend
+curl $BASE/matches/12345678/stats-trend
 ```
 
 **Resposta:**
@@ -193,7 +195,7 @@ curl http://4.157.187.122:8000/matches/12345678/stats-trend
 Escalações confirmadas dos dois times.
 
 ```bash
-curl http://4.157.187.122:8000/matches/12345678/lineup
+curl $BASE/matches/12345678/lineup
 ```
 
 **Resposta:**
@@ -222,7 +224,7 @@ curl http://4.157.187.122:8000/matches/12345678/lineup
 Artilheiros e garçons da liga.
 
 ```bash
-curl http://4.157.187.122:8000/matches/toplist
+curl $BASE/matches/toplist
 ```
 
 **Use para:** Contexto narrativo ("Salah, artilheiro da liga, está em campo hoje").
@@ -236,7 +238,7 @@ curl http://4.157.187.122:8000/matches/toplist
 Previsão estatística por nome dos times. **Não requer partida ao vivo.**
 
 ```bash
-curl "http://4.157.187.122:8000/predictions/?home=Arsenal&away=Chelsea"
+curl "$BASE/predictions/?home=Arsenal&away=Chelsea"
 ```
 
 **Resposta:**
@@ -281,7 +283,7 @@ curl "http://4.157.187.122:8000/predictions/?home=Arsenal&away=Chelsea"
 Previsão usando o ID da BetsAPI (resolve os nomes automaticamente).
 
 ```bash
-curl http://4.157.187.122:8000/predictions/11545080
+curl $BASE/predictions/11545080
 ```
 
 ---
@@ -291,10 +293,10 @@ curl http://4.157.187.122:8000/predictions/11545080
 **O endpoint principal do produto.** Agente LangGraph que combina todas as fontes em 3 nós sequenciais:
 1. `fetch_context` — placar, odds, H2H e escalações em paralelo via BetsAPI
 2. `fetch_historical` — forma dos times, previsão Poisson e risk scores do dataset local
-3. `generate_narrative` — GPT-4.1 (Azure OpenAI) gera headline + análise + previsão em Português
+3. `generate_narrative` — Groq (moonshotai/kimi-k2-instruct) gera headline + análise + previsão em Português
 
 ```bash
-curl http://4.157.187.122:8000/predictions/12345678/full-analysis
+curl $BASE/predictions/12345678/full-analysis
 ```
 
 **Tempo esperado:** 5–15 segundos (I/O paralelo + LLM). Não usar em polling automático — acionar sob demanda.
@@ -307,15 +309,14 @@ curl http://4.157.187.122:8000/predictions/12345678/full-analysis
     "match_id": "12345678",
     "headline": "Arsenal domina, mas Chelsea resiste",
     "analysis": "O Arsenal controla o jogo com 58% de posse e superioridade nos ataques perigosos (18 a 9). Apesar do placar aberto, o mercado ainda vê risco real de reação do Chelsea.",
-    "prediction": "Grandes chances de o Arsenal ampliar o placar nos próximos 15 minutos, com alta pressão e um adversário desgastado. Fique atento ao escanteio — dado histórico indica pico de gols neste intervalo.",
+    "prediction": "Grandes chances de o Arsenal ampliar o placar nos próximos 15 minutos, com alta pressão e um adversário desgastado.",
     "momentum_signal": "A odd do Arsenal recuou 12% desde o início — mercado confiante na vitória do mandante.",
     "confidence_label": "Alta"
   },
   "prediction": {
     "lambda_home": 1.671,
     "most_likely_score": "1-1",
-    "home_win_prob": 0.4844,
-    ...
+    "home_win_prob": 0.4844
   },
   "h2h": { "total_matches": 10, "home_wins": 6, ... },
   "stats_trend": { "momentum_score": 0.42, "momentum_label": "Domínio do Mandante", ... },
@@ -340,19 +341,59 @@ curl http://4.157.187.122:8000/predictions/12345678/full-analysis
 
 ### `POST /predictions/{event_id}/ask`
 
-Perguntas em linguagem natural sobre a partida.
+Perguntas em linguagem natural sobre a partida, com suporte a **histórico de conversa por sessão**.
 
 ```bash
-curl -X POST http://4.157.187.122:8000/predictions/12345678/ask \
+# Pergunta simples (sem histórico)
+curl -X POST $BASE/predictions/12345678/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Por que o time visitante está sofrendo tanto?"}'
+
+# Com histórico de sessão (passe o mesmo session_id nas perguntas seguintes)
+curl -X POST "$BASE/predictions/12345678/ask?session_id=550e8400-e29b-41d4-a716-446655440000" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Tem risco de virada?"}'
 ```
+
+**Query params:**
+| Param | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `session_id` | string (UUID) | Não | ID de sessão gerado pelo frontend. Reutilize entre perguntas do mesmo jogo para manter contexto. Omitir = pergunta isolada sem histórico. |
+
+**Como funciona o histórico:**
+- Gere um UUID no frontend (`crypto.randomUUID()`) na abertura do chat de uma partida
+- Reutilize o mesmo `session_id` em todas as perguntas subsequentes sobre aquela partida
+- O servidor armazena os pares pergunta/resposta no Supabase e injeta os **últimos 6** no contexto do LLM
+- O histórico persiste entre sessões de browser (até você limpá-lo)
 
 **Resposta:** Mesmo formato de `NarrativeResponse` (headline, analysis, prediction, confidence_label).
 
 **Casos de uso no frontend:**
 - Chatbot integrado ao card da partida
 - Botões de perguntas rápidas ("O que mudou no 2º tempo?", "Tem risco de virada?")
+- Conversa contínua — o LLM lembra do contexto das perguntas anteriores
+
+---
+
+### `DELETE /predictions/{event_id}/ask/history`
+
+Remove o histórico de conversa de uma sessão específica.
+
+```bash
+curl -X DELETE "$BASE/predictions/12345678/ask/history?session_id=550e8400-e29b-41d4-a716-446655440000"
+```
+
+**Query params:**
+| Param | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `session_id` | string (UUID) | **Sim** | ID da sessão a limpar |
+
+**Resposta:**
+```json
+{ "cleared": true, "session_id": "550e8400-...", "event_id": "12345678" }
+```
+
+**Quando usar:** Botão "Limpar conversa" no frontend, ou ao iniciar uma nova análise da mesma partida.
 
 ---
 
@@ -361,7 +402,7 @@ curl -X POST http://4.157.187.122:8000/predictions/12345678/ask \
 Narrativa simples sem o agente completo. Mais rápida, menos contexto.
 
 ```bash
-curl -X POST http://4.157.187.122:8000/predictions/12345678/narrative
+curl -X POST $BASE/predictions/12345678/narrative
 ```
 
 ---
@@ -373,7 +414,7 @@ curl -X POST http://4.157.187.122:8000/predictions/12345678/narrative
 Lista todos os times do dataset histórico.
 
 ```bash
-curl http://4.157.187.122:8000/analytics/teams
+curl $BASE/analytics/teams
 ```
 
 **Resposta:** `{"teams": [{"id": "17230", "name": "Arsenal"}, ...], "total": 35}`
@@ -385,7 +426,7 @@ curl http://4.157.187.122:8000/analytics/teams
 Forma recente do time.
 
 ```bash
-curl "http://4.157.187.122:8000/analytics/teams/Arsenal/form?n=10"
+curl "$BASE/analytics/teams/Arsenal/form?n=10"
 ```
 
 **Resposta:**
@@ -418,7 +459,7 @@ curl "http://4.157.187.122:8000/analytics/teams/Arsenal/form?n=10"
 Estatísticas agregadas (últimas 50 partidas).
 
 ```bash
-curl http://4.157.187.122:8000/analytics/teams/Arsenal/stats
+curl $BASE/analytics/teams/Arsenal/stats
 ```
 
 **Resposta:**
@@ -442,7 +483,7 @@ curl http://4.157.187.122:8000/analytics/teams/Arsenal/stats
 H2H histórico extraído do CSV local (complementa o H2H da BetsAPI).
 
 ```bash
-curl "http://4.157.187.122:8000/analytics/h2h?home=Arsenal&away=Chelsea&n=10"
+curl "$BASE/analytics/h2h?home=Arsenal&away=Chelsea&n=10"
 ```
 
 ---
@@ -452,7 +493,7 @@ curl "http://4.157.187.122:8000/analytics/h2h?home=Arsenal&away=Chelsea&n=10"
 Distribuição de 9,448 gols por intervalos de 15 minutos.
 
 ```bash
-curl http://4.157.187.122:8000/analytics/goal-patterns
+curl $BASE/analytics/goal-patterns
 ```
 
 **Resposta:**
@@ -481,7 +522,7 @@ curl http://4.157.187.122:8000/analytics/goal-patterns
 Distribuição de cartões por intervalo de 15 minutos.
 
 ```bash
-curl http://4.157.187.122:8000/analytics/card-patterns
+curl $BASE/analytics/card-patterns
 ```
 
 **Campos:** `total_yellows`, `total_reds`, `peak_minute_range`, `buckets[]`.
@@ -493,7 +534,7 @@ curl http://4.157.187.122:8000/analytics/card-patterns
 Scores de risco ao vivo calculados por heurística + padrão histórico.
 
 ```bash
-curl "http://4.157.187.122:8000/analytics/risk-scores?minute=75&score_diff=-1"
+curl "$BASE/analytics/risk-scores?minute=75&score_diff=-1"
 ```
 
 **Resposta:**
@@ -560,6 +601,15 @@ Ou calcula dinamicamente:
   GET /analytics/risk-scores?minute={minuto_atual}&score_diff={h-a}
 ```
 
+### Widget: "Chat da Partida"
+
+```
+1. Na abertura do card: gerar session_id = crypto.randomUUID()
+2. POST /predictions/{id}/ask?session_id={uuid}  → primeira pergunta
+3. Reutilizar o mesmo session_id nas perguntas seguintes
+4. Ao fechar/resetar o chat: DELETE /predictions/{id}/ask/history?session_id={uuid}
+```
+
 ---
 
 ## Tratamento de Erros
@@ -599,3 +649,4 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `confidence_label` | string | `"Alta"` \| `"Média"` \| `"Baixa"` |
 | `form_string` | string | Sequência de resultados ex: `"WWDLW"` |
 | `agent_steps` | string[] | Nós do grafo LangGraph executados |
+| `session_id` | string (UUID) | ID de sessão para histórico de chat — gerado pelo frontend |
