@@ -1,26 +1,49 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from app.api.v1.endpoints.matches import router as matches_router
+
+from app.routers import matches_router, predictions_router, analytics_router
 
 load_dotenv()
 
 app = FastAPI(
     title="Scout — Premier League AI Assistant",
-    description="Análise narrativa de partidas em tempo real. Dados → Interpretação → Insight.",
-    version="0.1.0",
+    description=(
+        "Análise narrativa e preditiva de partidas em tempo real.\n\n"
+        "## Módulos\n"
+        "| Prefixo | Responsabilidade |\n"
+        "|---|---|\n"
+        "| `/matches` | Partidas ao vivo, futuras, H2H, stats, escalações |\n"
+        "| `/predictions` | Modelo Poisson + análise completa do agente LangGraph |\n"
+        "| `/analytics` | Dataset histórico: forma, padrões de gol/cartão, risco |\n"
+    ),
+    version="0.3.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(matches_router)
+app.include_router(predictions_router)
+app.include_router(analytics_router)
 
 
-@app.get("/health")
+@app.get("/health", tags=["Sistema"])
 async def health():
-    return {"status": "ok", "league": "Premier League", "league_id": 535}
+    return {
+        "status": "ok",
+        "version": "0.3.0",
+        "league": "Premier League",
+        "betsapi_league_id": 94,
+        "modules": {
+            "matches": "/matches",
+            "predictions": "/predictions",
+            "analytics": "/analytics",
+        },
+    }

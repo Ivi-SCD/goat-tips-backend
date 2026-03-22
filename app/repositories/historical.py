@@ -1,0 +1,142 @@
+"""
+Historical Repository
+=====================
+Data-access layer for the local Premier League CSV dataset.
+
+Responsibility:  Load, cache and query raw CSV data.
+NOT responsible: Business logic, risk calculations, or formatting.
+
+Supabase migration note
+-----------------------
+This layer is intentionally isolated so it can be swapped for a database
+without touching services. To migrate:
+  1. Replace _load_*() with async Supabase client queries.
+  2. Replace @lru_cache with Redis / application-level caching.
+  3. Update COLUMNS mapping if schema differs.
+
+Why Supabase NOW is not required:
+  - The dataset is static (4,585 matches, not growing in real time).
+  - CSVs load in <1 s and fit comfortably in RAM (~50 MB pandas).
+  - A Supabase instance adds latency per query vs. in-process numpy.
+  - Recommended only if: multi-replica deploy, real-time ingestion,
+    or dataset grows beyond available server RAM.
+"""
+
+import os
+import logging
+from functools import lru_cache
+from typing import Optional
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+_BASE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "betsapi")
+
+# ── Cache globals ─────────────────────────────────────────────────────────────
+_events_df: Optional[pd.DataFrame] = None
+_stats_df: Optional[pd.DataFrame] = None
+_timeline_df: Optional[pd.DataFrame] = None
+
+
+def load_events() -> pd.DataFrame:
+    global _events_df
+    if _events_df is None:
+        path = os.path.join(_BASE, "premier_league_events.csv")
+        _events_df = pd.read_csv(path, low_memory=False)
+        _events_df["time_utc"] = pd.to_datetime(_events_df["time_utc"], errors="coerce")
+        logger.info("Historical: loaded events (%d rows)", len(_events_df))
+    return _events_df
+
+
+def load_stats() -> pd.DataFrame:
+    global _stats_df
+    if _stats_df is None:
+        path = os.path.join(_BASE, "premier_league_stats.csv")
+        _stats_df = pd.read_csv(path, low_memory=False)
+        logger.info("Historical: loaded stats (%d rows)", len(_stats_df))
+    return _stats_df
+
+
+def load_timeline() -> pd.DataFrame:
+    global _timeline_df
+    if _timeline_df is None:
+        path = os.path.join(_BASE, "premier_league_timeline.csv")
+        _timeline_df = pd.read_csv(path, low_memory=False)
+        logger.info("Historical: loaded timeline (%d rows)", len(_timeline_df))
+    return _timeline_df
+
+
+def get_all_teams() -> list[dict]:
+    events = load_events()
+    home = events[["home_team_id", "home_team_name"]].rename(
+        columns={"home_team_id": "id", "home_team_name": "name"}
+    )
+    away = events[["away_team_id", "away_team_name"]].rename(
+        columns={"away_team_id": "id", "away_team_name": "name"}
+    )
+    return (
+        pd.concat([home, away])
+        .drop_duplicates(subset=["id"])
+        .sort_values("name")
+        .to_dict(orient="records")
+    )
+
+
+def get_team_events(team_name: str, ended_only: bool = True) -> pd.DataFrame:
+    """Returns all events where `team_name` played (home or away)."""
+    events = load_events()
+    if ended_only:
+        events = events[events["time_status"] == 3]
+
+    lower = team_name.lower()
+    home_mask = events["home_team_name"].str.lower() == lower
+    away_mask = events["away_team_name"].str.lower() == lower
+    mask = home_mask | away_mask
+
+    if not mask.any():
+        # Partial match fallback
+        home_mask = events["home_team_name"].str.lower().str.contains(lower, na=False)
+        away_mask = events["away_team_name"].str.lower().str.contains(lower, na=False)
+        mask = home_mask | away_mask
+
+    return events[mask].copy()
+
+
+def get_h2h_events(home_team: str, away_team: str) -> pd.DataFrame:
+    """Returns ended events between two specific teams (either home/away)."""
+    events = load_events()
+    events = events[events["time_status"] == 3]
+    h = home_team.lower()
+    a = away_team.lower()
+    mask = (
+        (events["home_team_name"].str.lower() == h) &
+        (events["away_team_name"].str.lower() == a)
+    ) | (
+        (events["home_team_name"].str.lower() == a) &
+        (events["away_team_name"].str.lower() == h)
+    )
+    return events[mask].sort_values("time_unix", ascending=False).copy()
+
+
+def get_timeline_goals() -> pd.DataFrame:
+    """Returns timeline rows that are goal events."""
+    tl = load_timeline()
+    goal_mask = tl["text"].str.contains(r"Goal|goal", case=False, na=False, regex=True)
+    not_miss = ~tl["text"].str.contains(
+        r"Miss|Wide|Woodwork|no goal|disallow", case=False, na=False, regex=True
+    )
+    return tl[goal_mask & not_miss].copy()
+
+
+def get_timeline_cards() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Returns (yellow_df, red_df) timeline rows."""
+    tl = load_timeline()
+    yellow = tl[tl["text"].str.contains(r"Yellow Card", case=False, na=False, regex=True)].copy()
+    red = tl[tl["text"].str.contains(r"Red Card|Straight Red", case=False, na=False, regex=True)].copy()
+    return yellow, red
+
+
+def count_ended_matches() -> int:
+    events = load_events()
+    return int((events["time_status"] == 3).sum())

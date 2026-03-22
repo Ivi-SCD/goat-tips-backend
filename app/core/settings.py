@@ -1,20 +1,46 @@
-from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
 import os
 import certifi
+from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
 
 load_dotenv()
 
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+
+
 class Config(BaseSettings):
+    # BetsAPI
+    BETSAPI_TOKEN: str = os.getenv("BETSAPI_TOKEN", "")
+    PREMIER_LEAGUE_ID: int = int(os.getenv("PREMIER_LEAGUE_ID", "94"))
+
+    # Azure OpenAI (narrative service)
+    AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY")
+    AZURE_OPENAI_MODEL: str = os.getenv("AZURE_OPENAI_MODEL", "gpt-4.1")
+
+    # Supabase / PostgreSQL
+    SUPABASE_DB_URL: str = os.getenv("SUPABASE_DB_URL", "")
+    SUPABASE_DB_URL_ASYNC: str = os.getenv("SUPABASE_DB_URL_ASYNC", "")
+
+    # Azure Blob Storage (model artifacts)
+    AZURE_STORAGE_CONNECTION_STRING: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+    AZURE_STORAGE_CONTAINER: str = os.getenv("AZURE_STORAGE_CONTAINER", "models")
+    MODEL_BLOB_NAME: str = os.getenv("MODEL_BLOB_NAME", "poisson_model.pkl")
+
+    # Misc
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     KAGGLE_API_KEY: str = os.getenv("KAGGLE_API_KEY", "")
 
-_settings_instance: Config | None = None
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+_instance: Config | None = None
+
 
 def get_settings() -> Config:
-    global _settings_instance
-
-    if _settings_instance is None:
-        _settings_instance = Config()
-
-    return _settings_instance
+    global _instance
+    if _instance is None:
+        _instance = Config()
+    return _instance
