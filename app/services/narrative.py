@@ -1,7 +1,7 @@
 """
 Narrative Service
 =================
-Generates Portuguese match analysis narratives via Azure OpenAI GPT-4.1.
+Generates Portuguese match analysis narratives via Groq.
 LLM client configuration lives in app.services.llm_client.
 """
 
@@ -155,13 +155,22 @@ def _append_prediction_context(
 
 # ── LLM call helper ───────────────────────────────────────────────────────────
 
-async def _call_llm(match_id: str, context: str) -> NarrativeResponse:
+async def _call_llm(
+    match_id: str,
+    context: str,
+    history: list[dict] | None = None,
+) -> NarrativeResponse:
+    """Call Groq. `history` is a flat list of prior {role, content} pairs
+    (user/assistant alternating) inserted between the system prompt and the
+    current user message to maintain conversational context."""
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": context})
+
     message = await client.chat.completions.create(
         model=MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": context},
-        ],
+        messages=messages,
     )
     raw = (message.choices[0].message.content or "").strip() if message.choices else ""
     if not raw:
@@ -204,9 +213,21 @@ async def generate_narrative(match: MatchContext, user_question: str = "") -> Na
     return await _call_llm(match.event_id, _build_context_prompt(match, user_question))
 
 
-async def answer_question(match: MatchContext, question: str) -> NarrativeResponse:
-    """Answers a free-form question about the live match."""
-    return await generate_narrative(match, user_question=question)
+async def answer_question(
+    match: MatchContext,
+    question: str,
+    history: list[dict] | None = None,
+) -> NarrativeResponse:
+    """Answers a free-form question about the live match.
+
+    Pass `history` (list of prior {role, content} dicts) to maintain
+    conversational context across multiple questions in the same session.
+    """
+    return await _call_llm(
+        match.event_id,
+        _build_context_prompt(match, user_question=question),
+        history=history,
+    )
 
 
 async def generate_narrative_enriched(

@@ -13,10 +13,9 @@ class Config(BaseSettings):
     BETSAPI_TOKEN: str = os.getenv("BETSAPI_TOKEN", "")
     PREMIER_LEAGUE_ID: int = int(os.getenv("PREMIER_LEAGUE_ID", "94"))
 
-    # Azure OpenAI (narrative service)
-    AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT")
-    AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY")
-    AZURE_OPENAI_MODEL: str = os.getenv("AZURE_OPENAI_MODEL", "gpt-4.1")
+    # Groq (narrative service) — browse models: https://console.groq.com/docs/models
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "moonshotai/kimi-k2-instruct")
 
     # Supabase / PostgreSQL
     SUPABASE_DB_URL: str = os.getenv("SUPABASE_DB_URL", "")
@@ -28,7 +27,6 @@ class Config(BaseSettings):
     MODEL_BLOB_NAME: str = os.getenv("MODEL_BLOB_NAME", "poisson_model.pkl")
 
     # Misc
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     KAGGLE_API_KEY: str = os.getenv("KAGGLE_API_KEY", "")
 
     class Config:

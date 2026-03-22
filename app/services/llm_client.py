@@ -1,26 +1,26 @@
 """
-LLM Client — Azure OpenAI
-==========================
-Single place for the OpenAI client, model name, and system prompt.
+LLM Client — Groq (OpenAI-compatible)
+======================================
+Single place for the Groq client, model name, and system prompt.
 Import `client`, `MODEL`, and `SYSTEM_PROMPT` from here.
+
+Groq uses the OpenAI SDK with a custom base_url — no extra package needed.
+Default model: moonshotai/kimi-k2-instruct (131K ctx, ~1T MoE).
+Override via env: GROQ_MODEL=llama-3.3-70b-versatile
+Browse models: https://console.groq.com/docs/models
 """
 
-import os
-from openai import AsyncAzureOpenAI
+from openai import AsyncOpenAI
 
 from app.core.settings import get_settings
 
 settings = get_settings()
 
+MODEL = settings.GROQ_MODEL
 
-AZURE_ENDPOINT = settings.AZURE_OPENAI_ENDPOINT
-AZURE_API_KEY  = settings.AZURE_OPENAI_API_KEY
-MODEL          = settings.AZURE_OPENAI_MODEL
-
-client = AsyncAzureOpenAI(
-    api_version="2024-06-01",
-    api_key=AZURE_API_KEY,
-    azure_endpoint=AZURE_ENDPOINT,
+client = AsyncOpenAI(
+    api_key=settings.GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1",
 )
 
 SYSTEM_PROMPT = """Você é um analista esportivo especializado em Premier League.

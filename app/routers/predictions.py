@@ -5,10 +5,13 @@ Routes: Poisson match prediction, full LangGraph agent analysis, narrative, Q&A.
 """
 
 import asyncio
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services import betsapi
+from app.services import conversation
 from app.services.narrative import generate_narrative, answer_question
 from app.services.predictor import predict_match, predict_from_match_context, ScorePrediction
 from app.schemas.match import MatchContext, NarrativeResponse
@@ -107,7 +110,18 @@ class QuestionRequest(BaseModel):
 
 @router.post("/{event_id}/ask", response_model=NarrativeResponse,
              summary="Pergunta livre sobre a partida")
-async def ask_about_match(event_id: str, body: QuestionRequest):
+async def ask_about_match(
+    event_id: str,
+    body: QuestionRequest,
+    session_id: Optional[str] = Query(
+        default=None,
+        description=(
+            "ID de sessão para manter histórico de conversa. "
+            "Gere um UUID no frontend e reutilize nas perguntas seguintes do mesmo jogo. "
+            "Omitir = sem histórico (pergunta isolada)."
+        ),
+    ),
+):
     """
     Responde uma pergunta em linguagem natural sobre a partida.
 
@@ -115,8 +129,36 @@ async def ask_about_match(event_id: str, body: QuestionRequest):
     - "Por que o time da casa está perdendo?"
     - "O que pode mudar nos próximos 15 minutos?"
     - "Qual é a chance de empate agora?"
+
+    **Histórico de conversa:** passe `session_id` (UUID gerado pelo frontend) para
+    manter contexto entre perguntas. O histórico é armazenado no Supabase e os
+    últimos 6 pares de perguntas/respostas são injetados no contexto do LLM.
     """
     match = await betsapi.get_match_by_id(event_id)
     if not match:
         raise HTTPException(status_code=404, detail="Partida não encontrada")
-    return await answer_question(match, body.question)
+
+    history = await conversation.load_history(session_id, event_id) if session_id else []
+
+    response = await answer_question(match, body.question, history=history)
+
+    if session_id:
+        await conversation.save_turn(
+            session_id=session_id,
+            event_id=event_id,
+            question=body.question,
+            response_headline=response.headline,
+            response_analysis=response.analysis,
+        )
+
+    return response
+
+
+@router.delete("/{event_id}/ask/history", summary="Limpar histórico de sessão")
+async def clear_session_history(
+    event_id: str,
+    session_id: str = Query(..., description="ID da sessão a limpar"),
+):
+    """Remove o histórico de conversa de uma sessão específica."""
+    await conversation.clear_session(session_id, event_id)
+    return {"cleared": True, "session_id": session_id, "event_id": event_id}
