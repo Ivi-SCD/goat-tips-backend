@@ -25,24 +25,29 @@ MODEL_PKL = Path(__file__).parent.parent.parent / "models" / "poisson_model.pkl"
 MAX_GOALS = 7
 
 
-def _download_from_blob() -> bool:
-    """Try to pull model.pkl from Azure Blob Storage. Returns True on success."""
-    conn_str  = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-    container = os.getenv("AZURE_STORAGE_CONTAINER", "models")
-    blob_name = os.getenv("MODEL_BLOB_NAME", "poisson_model.pkl")
-    if not conn_str:
+def _download_from_cos() -> bool:
+    """Try to pull model.pkl from IBM Cloud Object Storage. Returns True on success."""
+    access_key = os.getenv("IBM_COS_ACCESS_KEY_ID", "")
+    secret_key = os.getenv("IBM_COS_SECRET_ACCESS_KEY", "")
+    endpoint   = os.getenv("IBM_COS_ENDPOINT", "https://s3.us-south.cloud-object-storage.appdomain.cloud")
+    bucket     = os.getenv("IBM_COS_BUCKET", "goat-tips-bucket")
+    key        = os.getenv("MODEL_BLOB_NAME", "poisson_model.pkl")
+    if not (access_key and secret_key):
         return False
     try:
-        from azure.storage.blob import BlobServiceClient
-        blob_client = BlobServiceClient.from_connection_string(conn_str) \
-                          .get_blob_client(container=container, blob=blob_name)
+        import ibm_boto3
+        cos = ibm_boto3.client(
+            "s3",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            endpoint_url=endpoint,
+        )
         MODEL_PKL.parent.mkdir(parents=True, exist_ok=True)
-        with open(MODEL_PKL, "wb") as f:
-            f.write(blob_client.download_blob().readall())
-        logger.info("Predictor: downloaded model.pkl from Azure Blob '%s/%s'", container, blob_name)
+        cos.download_file(bucket, key, str(MODEL_PKL))
+        logger.info("Predictor: downloaded model.pkl from IBM COS '%s/%s'", bucket, key)
         return True
     except Exception as exc:
-        logger.warning("Predictor: blob download failed — %s", exc)
+        logger.warning("Predictor: IBM COS download failed — %s", exc)
         return False
 
 
@@ -156,8 +161,8 @@ def get_model() -> PoissonModel:
     model = _load_from_pkl()
     if model:
         return model
-    # Try Azure Blob before falling back to inline fitting
-    if _download_from_blob():
+    # Try IBM COS before falling back to inline fitting
+    if _download_from_cos():
         model = _load_from_pkl()
         if model:
             return model

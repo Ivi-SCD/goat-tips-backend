@@ -21,9 +21,11 @@ class Config(BaseSettings):
     SUPABASE_DB_URL: str = os.getenv("SUPABASE_DB_URL", "")
     SUPABASE_DB_URL_ASYNC: str = os.getenv("SUPABASE_DB_URL_ASYNC", "")
 
-    # Azure Blob Storage (model artifacts)
-    AZURE_STORAGE_CONNECTION_STRING: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-    AZURE_STORAGE_CONTAINER: str = os.getenv("AZURE_STORAGE_CONTAINER", "models")
+    # IBM Cloud Object Storage (model artifacts — goat-tips-bucket, us-south)
+    IBM_COS_ACCESS_KEY_ID: str = os.getenv("IBM_COS_ACCESS_KEY_ID", "")
+    IBM_COS_SECRET_ACCESS_KEY: str = os.getenv("IBM_COS_SECRET_ACCESS_KEY", "")
+    IBM_COS_ENDPOINT: str = os.getenv("IBM_COS_ENDPOINT", "https://s3.us-south.cloud-object-storage.appdomain.cloud")
+    IBM_COS_BUCKET: str = os.getenv("IBM_COS_BUCKET", "goat-tips-bucket")
     MODEL_BLOB_NAME: str = os.getenv("MODEL_BLOB_NAME", "poisson_model.pkl")
 
     # Misc
