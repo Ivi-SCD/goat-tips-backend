@@ -1,0 +1,31 @@
+# Dev artifacts
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+.github/
+*.zip
+
+# Notebooks and reports
+notebooks/
+reports/
+*.ipynb
+
+# Heavy odds timeseries (563MB — stays local, not needed at runtime)
+data/betsapi/premier_league_odds.csv
+data/betsapi/premier_league_odds_timeseries.csv
+
+# Test data
+data/betsapi_smoketest/
+data/betsapi_test/
+data/kaggle/
+
+# Azure Functions (separate deployment)
+azure_functions/
+retrain/
+scripts/
+sql/
+docs/

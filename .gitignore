@@ -1,23 +1,52 @@
+# ── Environment ──────────────────────────────────────────────────────────────
 .env
-venv
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
+.env.*
+!.env.example
+
+# ── Python ────────────────────────────────────────────────────────────────────
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.Python
+dist/
+build/
+*.so
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Data files — NOT committed (large CSVs and raw exports) ──────────────────
+data/betsapi/*.csv
+data/betsapi/*.json
+data/betsapi_test/
+data/betsapi_smoketest/
+data/kaggle/
+
+# Exception: keep the export summary so repo documents what data was collected
+!data/betsapi/export_summary.json
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .idea/
 .vscode/
+*.swp
+.DS_Store
+
+# ── Logs & temp ───────────────────────────────────────────────────────────────
 *.log
 *.sqlite3
 *.db
 *.bak
 *.backup
-*.swp
-.DS_Store
-*.egg-info/
-.ipynb_checkpoints/
+reports/
+
+# ── Models — keep pkl and card, exclude large binaries if added later ─────────
+# models/*.pkl is committed (small, 1-2 KB serialized with joblib compress=3)
+# If the model grows >10 MB, add: models/*.pkl
