@@ -36,6 +36,12 @@ FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
           └── app/schemas/          # Pydantic schemas por domínio
 ```
 
+![Arquitetura do Sistema](docs/diagrams/assets/01-system-architecture.svg)
+
+![Arquitetura em Camadas](docs/diagrams/assets/04-layered-architecture.svg)
+
+![Dependências entre Módulos](docs/diagrams/assets/03-module-dependencies.svg)
+
 ### Infraestrutura IBM Cloud
 
 | Recurso | Tipo | Função |
@@ -47,6 +53,8 @@ FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
 | `goat-tips-bucket` | IBM Cloud Object Storage (us-south) | Artefato do modelo (`poisson_model.pkl`) |
 | Groq API | LLM (moonshotai/kimi-k2-instruct) | Narrativas em Português — 131K contexto, 1T MoE |
 | Supabase (us-west-2) | PostgreSQL | 4,585 jogos · 86K stats · 229K timeline · 20K odds · histórico de chat |
+
+![Infraestrutura IBM Cloud](docs/diagrams/assets/02-infrastructure.svg)
 
 ---
 
@@ -104,6 +112,8 @@ O Supabase (PostgreSQL) armazena os dados históricos, os novos jogos sincroniza
 - `v_matches` — join completo com nomes dos times
 - `v_goal_timeline` — gols por minuto (filtra ruído: só linhas `N' - Goal...`)
 
+![Diagrama ER — Banco de Dados](docs/diagrams/assets/15-database-er.svg)
+
 ---
 
 ## Decisões de Modelagem
@@ -151,6 +161,10 @@ O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine 
 3. Treina inline a partir do CSV (último recurso)
 ```
 
+![Carregamento do Modelo Poisson](docs/diagrams/assets/06-poisson-model-loading.svg)
+
+![Sequência — Retreinamento Semanal](docs/diagrams/assets/12-sequence-model-retrain.svg)
+
 ---
 
 ## Agente LangGraph
@@ -179,6 +193,10 @@ generate_narrative ────────────────────�
     → resposta sempre em Português
 ```
 
+![Fluxo — Full Analysis](docs/diagrams/assets/05-full-analysis-flow.svg)
+
+![Sequência — Full Analysis](docs/diagrams/assets/10-sequence-full-analysis.svg)
+
 **Por que `asyncio.gather` dentro de um único nó e não nós paralelos no LangGraph?**
 O LangGraph suporta fan-out nativo mas adiciona overhead de serialização de estado. Para 4 chamadas I/O que retornam em ~2s, `asyncio.gather` dentro do nó é mais simples e igualmente eficiente.
 
@@ -196,6 +214,10 @@ O endpoint `/predictions/{id}/ask` suporta histórico de conversa por sessão, a
 
 **Por que 6 pares?**
 Típico de uma sessão de análise de partida (< 10 perguntas). A janela deslizante descarta pares mais antigos silenciosamente — sem sumarização necessária para esse volume.
+
+![Fluxo — Histórico de Conversa](docs/diagrams/assets/07-conversation-flow.svg)
+
+![Sequência — Pergunta com Histórico](docs/diagrams/assets/11-sequence-ask-question.svg)
 
 ---
 
@@ -293,6 +315,10 @@ python scripts/train_model.py
 
 ## Endpoints
 
+![Casos de Uso — Visão Geral](docs/diagrams/assets/09-use-cases.svg)
+
+![Casos de Uso — /matches](docs/diagrams/assets/16-use-cases-matches.svg)
+
 ### `/matches` — Tempo real
 
 | Método | Rota | Descrição |
@@ -305,6 +331,8 @@ python scripts/train_model.py
 | GET | `/matches/{id}/stats-trend` | Momentum tático por período |
 | GET | `/matches/{id}/lineup` | Escalações confirmadas |
 
+![Casos de Uso — /predictions](docs/diagrams/assets/17-use-cases-predictions.svg)
+
 ### `/predictions` — Modelo + LLM
 
 | Método | Rota | Descrição |
@@ -315,6 +343,8 @@ python scripts/train_model.py
 | POST | `/predictions/{id}/narrative` | Narrativa LLM simples |
 | POST | `/predictions/{id}/ask` | Pergunta livre — aceita `?session_id=` para histórico |
 | DELETE | `/predictions/{id}/ask/history` | Limpa histórico de sessão (`?session_id=` obrigatório) |
+
+![Casos de Uso — /analytics](docs/diagrams/assets/18-use-cases-analytics.svg)
 
 ### `/analytics` — Dataset histórico
 
@@ -327,6 +357,8 @@ python scripts/train_model.py
 | GET | `/analytics/goal-patterns` | Distribuição de gols por minuto |
 | GET | `/analytics/card-patterns` | Distribuição de cartões por minuto |
 | GET | `/analytics/risk-scores` | Risk scores ao vivo (gol + cartão) |
+
+![Casos de Uso — Jobs](docs/diagrams/assets/19-use-cases-jobs.svg)
 
 ---
 

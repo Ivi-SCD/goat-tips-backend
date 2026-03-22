@@ -31,6 +31,8 @@ A Goat Tips API possui três módulos:
 | `/predictions` | Modelo Poisson + LLM (Groq) | 1–15 s |
 | `/analytics` | Dataset histórico (4,585 jogos) | <50 ms (cacheado) |
 
+![Casos de Uso — Visão Geral](diagrams/assets/09-use-cases.svg)
+
 ---
 
 ## Autenticação
@@ -40,6 +42,8 @@ Nenhuma autenticação é necessária para consumir a API. As chaves de terceiro
 ---
 
 ## Módulo `/matches`
+
+![Casos de Uso — /matches](diagrams/assets/16-use-cases-matches.svg)
 
 ### `GET /matches/live`
 
@@ -78,6 +82,8 @@ curl $BASE/matches/live
 - `probabilities.home_win`: probabilidade real sem margem da casa (0–1)
 - `kick_off_time`: horário de início em UTC (exibir como horário local no frontend)
 - `stadium` e `referee`: contexto adicional para enriquecer a UI
+
+![Fluxo — Partidas ao Vivo](diagrams/assets/08-live-matches-flow.svg)
 
 ---
 
@@ -233,6 +239,8 @@ curl $BASE/matches/toplist
 
 ## Módulo `/predictions`
 
+![Casos de Uso — /predictions](diagrams/assets/17-use-cases-predictions.svg)
+
 ### `GET /predictions/?home=Arsenal&away=Chelsea`
 
 Previsão estatística por nome dos times. **Não requer partida ao vivo.**
@@ -337,6 +345,10 @@ curl $BASE/predictions/12345678/full-analysis
 - `card_risk_score`: medidor visual de risco de cartão
 - `agent_steps`: útil para debug / loading states no frontend
 
+![Fluxo — Full Analysis](diagrams/assets/05-full-analysis-flow.svg)
+
+![Sequência — Full Analysis](diagrams/assets/10-sequence-full-analysis.svg)
+
 ---
 
 ### `POST /predictions/{event_id}/ask`
@@ -395,6 +407,10 @@ curl -X DELETE "$BASE/predictions/12345678/ask/history?session_id=550e8400-e29b-
 
 **Quando usar:** Botão "Limpar conversa" no frontend, ou ao iniciar uma nova análise da mesma partida.
 
+![Fluxo — Histórico de Conversa](diagrams/assets/07-conversation-flow.svg)
+
+![Sequência — Pergunta com Histórico](diagrams/assets/11-sequence-ask-question.svg)
+
 ---
 
 ### `POST /predictions/{event_id}/narrative`
@@ -408,6 +424,8 @@ curl -X POST $BASE/predictions/12345678/narrative
 ---
 
 ## Módulo `/analytics`
+
+![Casos de Uso — /analytics](diagrams/assets/18-use-cases-analytics.svg)
 
 ### `GET /analytics/teams`
 
@@ -650,3 +668,11 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `form_string` | string | Sequência de resultados ex: `"WWDLW"` |
 | `agent_steps` | string[] | Nós do grafo LangGraph executados |
 | `session_id` | string (UUID) | ID de sessão para histórico de chat — gerado pelo frontend |
+
+---
+
+## Schemas de Dados
+
+![Schemas — Domínio Match](diagrams/assets/13-schemas-match.svg)
+
+![Schemas — Prediction, Analytics & Agent](diagrams/assets/14-schemas-prediction-analytics.svg)
