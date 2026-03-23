@@ -229,99 +229,40 @@ async def answer_question(
     question: str,
     history: list[dict] | None = None,
 ) -> NarrativeResponse:
-    """Answer a free-form question using an agentic tool-calling loop.
+    """Answer a free-form question about a specific match using the 6-agent pipeline.
 
-    The LLM may call any tool in tools.TOOLS (web search, DB queries, BetsAPI)
-    up to MAX_TOOL_ROUNDS times before producing a final NarrativeResponse.
-    History (prior Q&A pairs) is injected for session context.
+    Delegates to the LangGraph multi-agent supervisor (ask_agent.run_ask_agent).
+    The match context block is pre-built and injected so the agent graph doesn't
+    need to re-fetch it.
     """
-    from app.services.tools import TOOLS, execute_tool
+    from app.agents.ask_agent import run_ask_agent
 
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if history:
-        messages.extend(history)
-    messages.append({
-        "role": "user",
-        "content": _build_context_prompt(match, user_question=question),
-    })
-
-    last_msg = None
-    for _ in range(MAX_TOOL_ROUNDS):
-        response = await client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-        )
-        last_msg = response.choices[0].message
-
-        # No tool calls → LLM produced the final answer
-        if not last_msg.tool_calls:
-            break
-
-        # Append assistant message (with tool_calls) then tool results
-        messages.append(last_msg.model_dump(exclude_unset=True))
-
-        tool_results = await asyncio.gather(*[
-            execute_tool(tc.function.name, json.loads(tc.function.arguments))
-            for tc in last_msg.tool_calls
-        ])
-        for tc, result in zip(last_msg.tool_calls, tool_results):
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-
-    # If every round ended with tool calls, force a final tool-free completion
-    if last_msg is None or last_msg.tool_calls:
-        response = await client.chat.completions.create(model=MODEL, messages=messages)
-        last_msg = response.choices[0].message
-
-    raw = (last_msg.content or "").strip()
-    return _parse_llm_raw(match.event_id, raw or _EMPTY_RAW)
+    match_context_text = _build_context_prompt(match, user_question="")
+    return await run_ask_agent(
+        question=question,
+        event_id=match.event_id,
+        match_context_text=match_context_text,
+        history=history,
+    )
 
 
 async def answer_general_question(
     question: str,
     history: list[dict] | None = None,
 ) -> NarrativeResponse:
-    """Answer a general Premier League question without match context.
+    """Answer a general Premier League question using the 6-agent pipeline.
 
-    Uses the same agentic tool-calling loop as answer_question but with
-    GENERAL_SYSTEM_PROMPT and no match context — suitable for the open /ask endpoint.
+    No match context — the agent graph will use live BetsAPI + historical DB
+    to answer from scratch.
     """
-    from app.services.tools import TOOLS, execute_tool
+    from app.agents.ask_agent import run_ask_agent
 
-    messages: list[dict] = [{"role": "system", "content": GENERAL_SYSTEM_PROMPT}]
-    if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": question})
-
-    last_msg = None
-    for _ in range(MAX_TOOL_ROUNDS):
-        response = await client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-        )
-        last_msg = response.choices[0].message
-
-        if not last_msg.tool_calls:
-            break
-
-        messages.append(last_msg.model_dump(exclude_unset=True))
-
-        tool_results = await asyncio.gather(*[
-            execute_tool(tc.function.name, json.loads(tc.function.arguments))
-            for tc in last_msg.tool_calls
-        ])
-        for tc, result in zip(last_msg.tool_calls, tool_results):
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-
-    if last_msg is None or last_msg.tool_calls:
-        response = await client.chat.completions.create(model=MODEL, messages=messages)
-        last_msg = response.choices[0].message
-
-    raw = (last_msg.content or "").strip()
-    return _parse_llm_raw("general", raw or _EMPTY_RAW)
+    return await run_ask_agent(
+        question=question,
+        event_id="",
+        match_context_text="",
+        history=history,
+    )
 
 
 async def generate_narrative_enriched(

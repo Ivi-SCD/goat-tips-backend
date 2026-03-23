@@ -49,6 +49,12 @@ class NarrativeResponse(BaseModel):
     momentum_signal: Optional[str] = None
     confidence_label: str               # "Alta" | "Média" | "Baixa"
 
+    # ── Multi-agent observability fields (all optional, backward-compatible) ──
+    confidence_score: Optional[float] = None        # 0.0–1.0 aggregate confidence
+    data_sources: Optional[list[str]] = None        # e.g. ["live_context", "historical_stats"]
+    partial_context: Optional[bool] = None          # True if any agent timed out / failed
+    agent_trace_id: Optional[str] = None            # UUID for observability / log correlation
+
 
 class QuestionRequest(BaseModel):
     question: str

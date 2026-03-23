@@ -166,6 +166,28 @@ TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "get_player_intel",
+            "description": (
+                "Consulta snapshots de força de jogadores e estilo de jogo por time, "
+                "derivados de dados FBref (Kaggle) e StatsBomb. Retorna índices de ataque, "
+                "criação e defesa do elenco, além dos jogadores-chave com impacto estimado. "
+                "Use para perguntas sobre qualidade do elenco, jogadores importantes ou estilo de jogo."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_name": {
+                        "type": "string",
+                        "description": "Nome do time da Premier League (ex: Arsenal, Liverpool)",
+                    },
+                },
+                "required": ["team_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_upcoming_odds",
             "description": (
                 "Fetch upcoming Premier League fixtures with current betting odds and kick-off times "
@@ -219,6 +241,10 @@ async def execute_tool(name: str, args: dict[str, Any]) -> str:
                 args["away_team"],
                 int(args.get("n", 10)),
             )
+
+        elif name == "get_player_intel":
+            from app.agents.ask_nodes import _query_player_intel_sync
+            return await asyncio.to_thread(_query_player_intel_sync, [args["team_name"]])
 
         elif name == "get_upcoming_odds":
             return await _upcoming_odds_async(args.get("team_filter"))
