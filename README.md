@@ -44,8 +44,8 @@ FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
 |---|---|---|
 | `goat-tips-backend-api` | Code Engine Application (us-east) | API FastAPI — HTTPS público |
 | `goat-tips-daily-sync` | Code Engine Job | Sync diário BetsAPI → Supabase, `0 3 * * *` UTC |
-| `goat-tips-retrain` | Code Engine Job | Retreinamento do modelo, `0 3 * * 1` (toda segunda) |
-| `icr.io/goat-tips-ns` | IBM Container Registry (global) | Imagens Docker das 3 aplicações |
+| `goat-tips-retrain` | Code Engine Job | Retreinamento do modelo, `0 3 * * 1` (toda segunda) — usa a mesma imagem do backend |
+| `icr.io/goat-tips-ns` | IBM Container Registry (global) | 2 imagens: `goat-tips-backend` (API + retrain bundled) e `goat-tips-daily-sync` |
 | `goat-tips-bucket` | IBM Cloud Object Storage (us-south) | Artefato do modelo (`poisson_model.pkl`) |
 | Groq API | LLM (moonshotai/kimi-k2-instruct) | Narrativas em Português — 131K contexto, 1T MoE |
 | Supabase (us-west-2) | PostgreSQL | 4,585 jogos · 86K stats · 229K timeline · 20K odds · histórico de chat |
@@ -132,26 +132,113 @@ P(placar = i-j) = Poisson(λ_home, i) × Poisson(λ_away, j)
 3. Geramos uma matriz 7×7 de probabilidades de placar (0–6 gols por time)
 4. Da matriz extraímos: placar mais provável, top 5 placares, Over 2.5, BTTS, vitória/empate/derrota
 
-**Melhorias implementadas (v0.4.0):**
-- **P1 — Correção Dixon-Coles (ρ=0.04)** para placares baixos (0-0, 1-0, 0-1, 1-1): corrige subestimação de ~35% dos resultados da PL
-- **P2 — Time-decay** (half-life 1 ano): jogos recentes têm mais peso exponencialmente
-- **P3 — Ataque/defesa separados por mando**: `attack_home`, `attack_away`, `defense_home`, `defense_away` por time
-- **P6 — Matriz normalizada**: `mat /= mat.sum()` após correção ρ
+**Melhorias implementadas (v0.5.0) — 8 features no total:**
+
+| Código | Feature | Impacto |
+|--------|---------|---------|
+| P1 | **Dixon-Coles ρ=-0.05** (cross-validado em 1000 jogos) | Corrige subestimação dos placares 0-0, 1-0, 0-1, 1-1 |
+| P2 | **Time-decay** (half-life 1 ano) | Jogos recentes têm mais peso exponencialmente |
+| P3 | **Ataque/defesa separados por mando** | `attack_home`, `attack_away`, `defense_home`, `defense_away` por time |
+| P4 | **xG blend (40%)** | 1,291 jogos com xG (2022–2026): `λ = 0.6 × goals_strength + 0.4 × xg_strength` |
+| P5 | **Referee goal factor** | Multiplica λ pelo desvio histórico do árbitro em relação à média da liga |
+| P6 | **In-play Bayesian** | Atualiza P(resultado) condicionado ao placar atual e ao minuto |
+| P7 | **Matriz normalizada** | `mat /= mat.sum()` após correção Dixon-Coles |
+| P8 | **Calibração com Brier Score** | Endpoint de backtesting com comparação predicted vs actual |
+
+### Feature P4 — xG Blend (40%)
+
+O xG ("expected goals") é uma métrica de qualidade de chute. Para times com dados suficientes (≥10 jogos com xG), blendamos as forças de ataque/defesa:
+
+```python
+XG_BLEND = 0.4  # 40% xG, 60% goals
+
+home_attack = (1 - XG_BLEND) × goals_attack_home + XG_BLEND × xg_attack_home
+away_defense = (1 - XG_BLEND) × goals_defense_away + XG_BLEND × xg_defense_away
+```
+
+**Por que 40%?** O xG é um melhor preditor de resultados futuros do que gols brutos (especialmente em jogos com pouco volume), mas não captura completamente a "finishing ability" de times como Arsenal e City. O blend 60/40 equilibra ambos.
+
+**Cobertura:** 25 dos 35 times têm xG, cobrindo 1,291 jogos de 2022–2026. Times sem xG usam 100% das forças baseadas em gols.
+
+### Feature P5 — Referee Goal Factor
+
+Árbitros diferem significativamente em como conduzem as partidas. O fator de árbitro ajusta os λ multiplicativamente:
+
+```python
+ref_factor = avg_goals_with_referee / league_avg_goals
+
+# Exemplo real — 3,715 jogos com árbitros identificados:
+# Michael Oliver (279 jogos): factor ≈ 1.03 → +3% gols (árbitro permissivo)
+# Stuart Attwell:  factor ≈ 0.96 → -4% gols (árbitro rigoroso)
+
+lh *= ref_factor  # ajusta λ_home
+la *= ref_factor  # ajusta λ_away
+```
+
+**Threshold de confiança:** apenas árbitros com ≥20 jogos no dataset recebem fator. Os demais usam `factor=1.0`. Cobertura: **82.6% dos jogos** (3,715 de 4,495).
+
+**Ativação:** passe `?referee=Michael+Oliver` no endpoint de previsão ou use o `event_id` de um jogo ao vivo (o árbitro é extraído automaticamente da BetsAPI).
+
+### Feature P6 — In-play Bayesian Update
+
+A previsão pré-jogo torna-se obsoleta após o primeiro gol. O modelo in-play recalcula:
+
+```
+P(resultado final | placar atual, minuto)
+```
+
+**Algoritmo:**
+1. Computa λ_home e λ_away pré-jogo (igual ao predict_match, incluindo xG e árbitro)
+2. Escala os λ pela fração de tempo restante: `λ_rem = λ_full × (90 - minute) / 90`
+3. Calcula distribuição de gols **adicionais** com `Poisson(λ_rem)`
+4. Constrói a matriz de placar final deslocando pelo placar atual
+5. Normaliza e extrai home_win, draw, away_win
+
+**Exemplo — Arsenal 1-0 Chelsea, Michael Oliver:**
+
+| Momento | Home Win | Draw | Away Win |
+|---------|----------|------|----------|
+| Pré-jogo | 54.8% | 22.1% | 23.1% |
+| 30' | 77.7% | 15.8% | 6.5% |
+| 70' | 84.9% | 13.4% | 1.7% |
+| 85' | 94.7% | 5.2% | 0.2% |
+
+### Feature P8 — Calibração e Backtesting
+
+O endpoint `GET /analytics/model/calibration?n=500` executa backtesting nos últimos N jogos encerrados:
+
+**Resultados em 500 jogos (cross-validação leave-last-N-out):**
+
+| Mercado | Brier Score | Calibração |
+|---------|-------------|------------|
+| Home Win | 0.2161 | Boa |
+| Draw | 0.1886 | Boa |
+| Away Win | 0.2003 | Boa |
+| Over 2.5 | 0.2387 | Boa |
+| BTTS | 0.2431 | Boa |
+
+**Brier Score** = erro quadrático médio entre probabilidade prevista e resultado real (0 = perfeito, 0.25 = modelo sem discriminação, menor = melhor). Scores ≤0.24 indicam modelo com poder preditivo real.
 
 ### Ciclo de retreinamento
 
-O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine Job** (`goat-tips-retrain`). O job:
-1. Puxa os jogos encerrados do Supabase (sempre atualizado pelo job diário)
-2. Re-calcula as forças de ataque e defesa de todos os times
-3. Serializa com `joblib` e faz upload para IBM COS (`goat-tips-bucket/poisson_model.pkl`)
-4. Na próxima requisição, o `predictor.py` baixa o novo pkl automaticamente
+O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine Job** (`goat-tips-retrain`). O job usa a **mesma imagem Docker da API** (`goat-tips-backend:latest`) — sem imagem separada, economizando 215 MB no ICR.
+
+```
+1. psycopg2 → Supabase → 4,495 jogos encerrados
+2. query xG → match_stats WHERE metric='xg' (1,291 registros)
+3. Treina forças home/away split por time
+4. xG blend para times com ≥10 jogos com xG (25 times)
+5. Serializa com joblib compress=3 → poisson_model.pkl
+6. ibm_boto3 → upload para IBM COS (goat-tips-bucket)
+7. Na próxima requisição, predictor.py baixa o novo pkl via IBM COS
+```
 
 ### Fallback em cadeia do predictor
 
 ```
-1. Carrega models/poisson_model.pkl local (mais rápido)
-2. Tenta download do IBM COS (quando não tem pkl local)
-3. Treina inline a partir do CSV com time-decay e split home/away (último recurso)
+1. Carrega models/poisson_model.pkl local (mais rápido — <1ms)
+2. Tenta download do IBM COS (quando não tem pkl local — ~2s)
+3. Treina inline a partir do CSV com time-decay e split home/away (último recurso — ~5s)
 ```
 
 ---
@@ -305,11 +392,11 @@ docker push icr.io/goat-tips-ns/goat-tips-daily-sync:latest
 ibmcloud ce job update --name goat-tips-daily-sync \
   --image icr.io/goat-tips-ns/goat-tips-daily-sync:latest
 
-# Retrain (já criado — atualizar imagem se necessário)
-docker build --network host -t icr.io/goat-tips-ns/goat-tips-retrain:latest retrain/
-docker push icr.io/goat-tips-ns/goat-tips-retrain:latest
+# Retrain — usa a mesma imagem do backend (retrain.py está bundled)
+# Não requer build/push separado. Apenas atualize o job após atualizar o backend:
 ibmcloud ce job update --name goat-tips-retrain \
-  --image icr.io/goat-tips-ns/goat-tips-retrain:latest
+  --image icr.io/goat-tips-ns/goat-tips-backend:latest \
+  --argument "python" --argument "retrain.py"
 
 # Execução manual
 ibmcloud ce jobrun submit --job goat-tips-daily-sync
@@ -353,11 +440,15 @@ python scripts/train_model.py
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/predictions/?home=Arsenal&away=Chelsea` | Previsão Poisson por nome (sem partida ao vivo) |
+| GET | `/predictions/?home=Arsenal&away=Chelsea` | Previsão Poisson pré-jogo (aceita `?referee=`) |
+| GET | `/predictions/?home=X&away=Y&referee=Z` | Previsão com ajuste de árbitro |
+| GET | `/predictions/inplay?home=X&away=Y&home_goals=N&away_goals=N&minute=N` | **Previsão Bayesiana in-play por nome** |
 | GET | `/predictions/{id}` | Previsão Poisson via event_id |
+| GET | `/predictions/{id}/inplay` | **In-play automático** — busca placar/minuto da BetsAPI |
 | GET | `/predictions/{id}/full-analysis` | **Análise completa — agente LangGraph** |
 | POST | `/predictions/{id}/narrative` | Narrativa LLM simples |
 | POST | `/predictions/{id}/ask` | Pergunta livre — aceita `?session_id=` para histórico |
+| POST | `/predictions/ask` | Pergunta geral sobre a Premier League (sem event_id) |
 | DELETE | `/predictions/{id}/ask/history` | Limpa histórico de sessão (`?session_id=` obrigatório) |
 
 ### `/analytics` — Dataset histórico
@@ -367,13 +458,14 @@ python scripts/train_model.py
 | GET | `/analytics/teams` | Lista os 35 times do dataset |
 | GET | `/analytics/teams/{name}/form` | Forma recente (últimos N jogos) |
 | GET | `/analytics/teams/{name}/stats` | Win rate, clean sheets, BTTS |
-| GET | `/analytics/h2h?home=X&away=Y` | H2H histórico (4,585 jogos) |
-| GET | `/analytics/goal-patterns` | Distribuição de gols por minuto |
-| GET | `/analytics/card-patterns` | Distribuição de cartões por minuto |
+| GET | `/analytics/teams/{name}/profile` | Perfil avançado: shot efficiency, xG, gols por half, home vs away |
+| GET | `/analytics/h2h?home=X&away=Y` | H2H histórico (4,495 jogos) |
+| GET | `/analytics/goal-patterns` | Distribuição de gols por minuto (9,508 gols) |
+| GET | `/analytics/card-patterns` | Distribuição de cartões por minuto (11,391 cartões) |
 | GET | `/analytics/risk-scores` | Risk scores ao vivo (gol + cartão) |
 | GET | `/analytics/referees` | Lista todos os árbitros do dataset |
 | GET | `/analytics/referees/{name}/stats` | Estatísticas do árbitro: cartões/jogo, faltas, home win rate |
-| GET | `/analytics/teams/{name}/profile` | Perfil avançado: shot efficiency, xG, gols por half, home vs away |
+| GET | `/analytics/model/calibration?n=500` | **Backtesting do modelo** com Brier scores em N jogos recentes |
 
 ---
 

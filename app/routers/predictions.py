@@ -14,8 +14,9 @@ from app.services import betsapi
 from app.services import conversation
 from app.services.narrative import generate_narrative, answer_question, answer_general_question
 from app.services.predictor import predict_match, predict_from_match_context, predict_inplay, ScorePrediction
+from app.services.weather import get_match_weather
 from app.schemas.match import MatchContext, NarrativeResponse
-from app.schemas.prediction import ScorePredictionResponse
+from app.schemas.prediction import ScorePredictionResponse, HalfTimePrediction
 from app.schemas.agent import FullMatchAnalysis
 
 router = APIRouter(prefix="/predictions", tags=["Previsões"])
@@ -26,6 +27,18 @@ class QuestionRequest(BaseModel):
 
 
 def _pred_to_response(raw: ScorePrediction) -> ScorePredictionResponse:
+    ht = None
+    if raw.half_time:
+        ht = HalfTimePrediction(
+            home_win_prob=raw.half_time.home_win_prob,
+            draw_prob=raw.half_time.draw_prob,
+            away_win_prob=raw.half_time.away_win_prob,
+            over_0_5_prob=raw.half_time.over_0_5_prob,
+            over_1_5_prob=raw.half_time.over_1_5_prob,
+            most_likely_score=raw.half_time.most_likely_score,
+            lambda_home=raw.half_time.lambda_home,
+            lambda_away=raw.half_time.lambda_away,
+        )
     return ScorePredictionResponse(
         home_team=raw.home_team, away_team=raw.away_team,
         lambda_home=raw.lambda_home, lambda_away=raw.lambda_away,
@@ -35,6 +48,9 @@ def _pred_to_response(raw: ScorePrediction) -> ScorePredictionResponse:
         most_likely_score_prob=raw.most_likely_score_prob,
         top_scores=raw.top_scores, score_matrix=raw.score_matrix,
         confidence=raw.confidence, model_note=raw.model_note,
+        half_time=ht,
+        weather_factor=raw.weather_factor,
+        weather_condition=raw.weather_condition,
     )
 
 
@@ -78,6 +94,9 @@ async def predict_by_name(
     home: str = Query(..., description="Nome do time mandante (ex: Arsenal)"),
     away: str = Query(..., description="Nome do time visitante (ex: Chelsea)"),
     referee: Optional[str] = Query(default=None, description="Nome do árbitro (ajusta probabilidades de gols)"),
+    stadium: Optional[str] = Query(default=None, description="Nome do estádio (ex: Emirates Stadium) para ajuste climático"),
+    city: Optional[str] = Query(default=None, description="Cidade do jogo (fallback quando estádio não encontrado)"),
+    match_hour_utc: Optional[int] = Query(default=None, ge=0, le=23, description="Hora do jogo em UTC (0-23) para previsão climática"),
 ):
     """
     **Previsão Poisson por nome dos times** — não requer event_id.
@@ -85,9 +104,13 @@ async def predict_by_name(
     Útil para prever qualquer confronto, incluindo jogos futuros ainda sem ID registrado.
     Modelo treinado em 4,495 jogos da Premier League (2014–2026).
 
-    Exemplo: `GET /predictions/?home=Arsenal&away=Chelsea&referee=Michael+Oliver`
+    Exemplo: `GET /predictions/?home=Arsenal&away=Chelsea&referee=Michael+Oliver&stadium=Emirates+Stadium`
     """
-    raw = await asyncio.to_thread(predict_match, home, away, referee_name=referee)
+    weather = await get_match_weather(stadium, city, match_hour_utc)
+    wf = weather.goal_factor if weather else 1.0
+    wc = weather.condition_label if weather else None
+    raw = await asyncio.to_thread(predict_match, home, away,
+                                  referee_name=referee, weather_factor=wf, weather_condition=wc)
     return _pred_to_response(raw)
 
 
@@ -100,17 +123,20 @@ async def predict_inplay_by_name(
     away_goals: int = Query(..., ge=0, description="Gols atuais do visitante"),
     minute: int = Query(..., ge=1, le=90, description="Minuto atual do jogo"),
     referee: Optional[str] = Query(default=None, description="Nome do árbitro"),
+    home_red: int = Query(default=0, ge=0, le=2, description="Cartões vermelhos do mandante"),
+    away_red: int = Query(default=0, ge=0, le=2, description="Cartões vermelhos do visitante"),
 ):
     """
-    **Previsão Bayesiana in-play** — atualiza probabilidades considerando placar e minuto.
+    **Previsão Bayesiana in-play (Non-Homogeneous Poisson)** — probabilidades dado placar, minuto e cartões vermelhos.
 
-    Exemplo: `GET /predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70`
+    Usa taxa de gols empírica por período (9,448 gols analisados), não taxa constante.
+    Cartões vermelhos reduzem λ_ataque em ~28% por jogador a menos.
 
-    Retorna as probabilidades de resultado final **dado o estado atual do jogo**.
-    Muito mais preciso que a previsão pré-jogo durante partidas ao vivo.
+    Exemplo: `GET /predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70&home_red=1`
     """
     raw = await asyncio.to_thread(
         predict_inplay, home, away, home_goals, away_goals, minute, referee,
+        home_red, away_red,
     )
     return _pred_to_response(raw)
 

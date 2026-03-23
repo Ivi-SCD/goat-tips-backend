@@ -89,6 +89,18 @@ class PoissonModel:
 
 
 @dataclass
+class HalfTimePrediction:
+    home_win_prob: float
+    draw_prob: float
+    away_win_prob: float
+    over_0_5_prob: float
+    over_1_5_prob: float
+    most_likely_score: str
+    lambda_home: float
+    lambda_away: float
+
+
+@dataclass
 class ScorePrediction:
     home_team: str
     away_team: str
@@ -105,6 +117,45 @@ class ScorePrediction:
     score_matrix: list[list[float]]
     confidence: str
     model_note: str
+    half_time: Optional["HalfTimePrediction"] = None
+    weather_factor: float = 1.0
+    weather_condition: Optional[str] = None
+
+
+# ── Half-time prediction ──────────────────────────────────────────────────────
+
+# Empirical goal fraction by half (from 9,448 timeline goals)
+_FH_FRACTION = 0.4598  # 46% of goals occur in first 45 min
+_SH_FRACTION = 0.5403  # 54% in second 45 min
+
+
+def _compute_halftime(lh: float, la: float) -> HalfTimePrediction:
+    """Compute half-time score distribution using first-half λ fractions."""
+    lh_fh = lh * _FH_FRACTION
+    la_fh = la * _FH_FRACTION
+    n = 6
+    hp = np.array([poisson.pmf(k, lh_fh) for k in range(n)])
+    ap = np.array([poisson.pmf(k, la_fh) for k in range(n)])
+    mat = np.outer(hp, ap)
+
+    ht_home = float(np.sum(np.tril(mat, k=-1)))
+    ht_draw = float(np.trace(mat))
+    ht_away = float(np.sum(np.triu(mat, k=1)))
+    ht_0_0 = float(mat[0, 0])
+    ht_over_05 = 1.0 - ht_0_0
+    ht_over_15 = float(1.0 - sum(mat[i, j] for i in range(n) for j in range(n) if i + j <= 1))
+
+    best = np.unravel_index(np.argmax(mat), mat.shape)
+    return HalfTimePrediction(
+        home_win_prob=round(ht_home, 4),
+        draw_prob=round(ht_draw, 4),
+        away_win_prob=round(ht_away, 4),
+        over_0_5_prob=round(ht_over_05, 4),
+        over_1_5_prob=round(max(ht_over_15, 0), 4),
+        most_likely_score=f"{best[0]}-{best[1]}",
+        lambda_home=round(lh_fh, 3),
+        lambda_away=round(la_fh, 3),
+    )
 
 
 # ── Dixon-Coles tau correction ────────────────────────────────────────────────
@@ -299,7 +350,9 @@ def _get_referee_goal_factor(referee_name: Optional[str]) -> float:
 
 
 def predict_match(home_team: str, away_team: str,
-                  referee_name: Optional[str] = None) -> ScorePrediction:
+                  referee_name: Optional[str] = None,
+                  weather_factor: float = 1.0,
+                  weather_condition: Optional[str] = None) -> ScorePrediction:
     model = get_model()
     home_key = _find_team(home_team, model)
     away_key = _find_team(away_team, model)
@@ -330,6 +383,11 @@ def predict_match(home_team: str, away_team: str,
     if ref_factor != 1.0:
         lh *= ref_factor
         la *= ref_factor
+
+    # Weather goal factor (rain/wind reduce scoring)
+    if weather_factor != 1.0:
+        lh *= weather_factor
+        la *= weather_factor
 
     n = MAX_GOALS
     hp = np.array([poisson.pmf(k, lh) for k in range(n)])
@@ -374,12 +432,19 @@ def predict_match(home_team: str, away_team: str,
         top_scores=top5,
         score_matrix=[[round(float(mat[i, j]), 5) for j in range(n)] for i in range(n)],
         confidence=confidence, model_note=note,
+        half_time=_compute_halftime(lh, la),
+        weather_factor=round(weather_factor, 3),
+        weather_condition=weather_condition,
     )
 
 
 def predict_from_match_context(match) -> ScorePrediction:
     referee = getattr(match, "referee", None)
     return predict_match(match.home.name, match.away.name, referee_name=referee)
+
+
+RED_CARD_ATTACK_PENALTY = 0.72  # 10-man team attack λ multiplier (~0.28 goals/match reduction)
+RED_CARD_DEFENSE_BOOST  = 0.90  # 10-man team concedes slightly more (pressure relief for opponent)
 
 
 def predict_inplay(
@@ -389,11 +454,13 @@ def predict_inplay(
     current_away_goals: int,
     minute: int,
     referee_name: Optional[str] = None,
+    home_red_cards: int = 0,
+    away_red_cards: int = 0,
 ) -> ScorePrediction:
     """In-play Bayesian update: P(final score | current score, minute).
 
-    Uses the pre-match λ scaled by remaining time fraction to compute
-    the distribution of remaining goals, then shifts by current score.
+    Uses non-homogeneous Poisson (empirical goal rate by time bucket) scaled by
+    remaining time fraction, adjusted for red cards and referee tendency.
     """
     model = get_model()
     home_key = _find_team(home_team, model)
@@ -423,11 +490,39 @@ def predict_inplay(
     lh_full *= ref_factor
     la_full *= ref_factor
 
-    # Scale lambdas by remaining time fraction
+    # Non-Homogeneous Poisson: scale λ by fraction of goals expected in remaining time.
+    # Weights derived from 9,448 goals in 229K timeline events (empirical goal rate per bucket).
+    # Goal rate accelerates mid-match (46-75 = x1.05-x1.12 of avg), decelerates early/late.
+    _BUCKET_WEIGHTS = [
+        (1,  15, 0.1388),
+        (16, 30, 0.1586),
+        (31, 45, 0.1624),
+        (46, 60, 0.1745),
+        (61, 75, 0.1861),
+        (76, 95, 0.1797),  # includes injury time bucket
+    ]
     minute = max(1, min(minute, 90))
-    remaining = max((90 - minute) / 90, 0.01)
-    lh_rem = lh_full * remaining
-    la_rem = la_full * remaining
+    remaining_fraction = 0.0
+    for lo, hi, w in _BUCKET_WEIGHTS:
+        if minute >= hi:
+            continue  # bucket fully elapsed
+        if minute <= lo:
+            remaining_fraction += w  # bucket fully remaining
+        else:
+            # partially elapsed: linear interpolation within bucket
+            remaining_fraction += w * (hi - minute) / (hi - lo)
+
+    remaining_fraction = max(remaining_fraction, 0.01)
+    lh_rem = lh_full * remaining_fraction
+    la_rem = la_full * remaining_fraction
+
+    # Red card adjustment: 10-man team attacks less, opponent attacks more
+    if home_red_cards > 0:
+        lh_rem *= RED_CARD_ATTACK_PENALTY ** home_red_cards
+        la_rem *= (1 / RED_CARD_DEFENSE_BOOST) ** home_red_cards
+    if away_red_cards > 0:
+        la_rem *= RED_CARD_ATTACK_PENALTY ** away_red_cards
+        lh_rem *= (1 / RED_CARD_DEFENSE_BOOST) ** away_red_cards
 
     # Distribution of remaining goals
     n = MAX_GOALS
@@ -469,9 +564,14 @@ def predict_inplay(
     if not away_key:
         unknown.append(f"'{away_team}' fora do dataset")
     confidence = "Alta" if (home_key and away_key) else ("Média" if (home_key or away_key) else "Baixa")
+    red_note = ""
+    if home_red_cards:
+        red_note += f" 🟥{home_team}(x{home_red_cards})"
+    if away_red_cards:
+        red_note += f" 🟥{away_team}(x{away_red_cards})"
     note = (
-        f"In-play Bayesian — {minute}' ({current_home_goals}-{current_away_goals}). "
-        f"λ restante: home={lh_rem:.2f}, away={la_rem:.2f}. "
+        f"In-play (Non-Homogeneous Poisson) — {minute}' ({current_home_goals}-{current_away_goals}){red_note}. "
+        f"λ restante: home={lh_rem:.2f}, away={la_rem:.2f} ({remaining_fraction:.1%} do jogo). "
         f"Base: {model.n_matches} jogos PL."
     )
     if unknown:

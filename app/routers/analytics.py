@@ -6,9 +6,12 @@ All data comes from local CSV dataset — no external API calls.
 """
 
 import asyncio
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services import analytics
+from app.services.weather import get_match_weather
 from app.schemas.analytics import TeamForm, H2HRecord, GoalPatterns, CardPatterns, TeamProfile, RefereeStats
 
 router = APIRouter(prefix="/analytics", tags=["Analytics Histórico"])
@@ -132,6 +135,54 @@ async def get_model_calibration(
     Tempo: ~10s para 500 jogos (cacheado após primeira chamada).
     """
     return await asyncio.to_thread(analytics.get_model_calibration, n)
+
+
+@router.get("/weather", summary="Condições climáticas para um estádio")
+async def get_weather(
+    stadium: Optional[str] = Query(default=None, description="Nome do estádio (ex: Emirates Stadium)"),
+    city: Optional[str] = Query(default=None, description="Cidade (fallback quando estádio não encontrado)"),
+    match_hour_utc: Optional[int] = Query(default=None, ge=0, le=23, description="Hora do jogo em UTC"),
+):
+    """
+    Retorna condições climáticas atuais ou previstas para um estádio da Premier League.
+
+    Usa a **Open-Meteo API** (gratuita, sem chave). Suporta:
+    - 24+ estádios da Premier League por nome exato ou parcial
+    - Fallback por cidade
+    - Previsão horária para a hora exata do jogo (UTC)
+
+    O campo `goal_factor` indica o impacto no modelo de gols:
+    - `1.0` = sem impacto (clima neutro)
+    - `0.85` = tempestade forte (reduz gols esperados em ~15%)
+
+    Exemplos:
+    - `GET /analytics/weather?stadium=Emirates+Stadium`
+    - `GET /analytics/weather?city=London&match_hour_utc=15`
+    """
+    if not stadium and not city:
+        raise HTTPException(400, detail="Informe 'stadium' ou 'city'")
+
+    weather = await get_match_weather(stadium, city, match_hour_utc)
+    if not weather:
+        raise HTTPException(404, detail="Estádio/cidade não encontrado ou API de clima indisponível")
+
+    return {
+        "stadium": stadium,
+        "city": city,
+        "weather_code": weather.weather_code,
+        "condition": weather.condition_label,
+        "description": weather.description,
+        "precipitation_mm": weather.precipitation_mm,
+        "wind_speed_kmh": weather.wind_speed_kmh,
+        "temperature_c": weather.temperature_c,
+        "goal_factor": weather.goal_factor,
+        "source": weather.source,
+        "impact": "neutro" if weather.goal_factor >= 0.99 else (
+            "leve" if weather.goal_factor >= 0.94 else (
+                "moderado" if weather.goal_factor >= 0.87 else "severo"
+            )
+        ),
+    }
 
 
 @router.get("/risk-scores", summary="Scores de risco ao vivo")

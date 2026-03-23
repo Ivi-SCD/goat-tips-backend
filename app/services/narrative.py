@@ -221,7 +221,7 @@ async def generate_narrative(match: MatchContext, user_question: str = "") -> Na
     return await _call_llm(match.event_id, _build_context_prompt(match, user_question))
 
 
-MAX_TOOL_ROUNDS = 3
+MAX_TOOL_ROUNDS = 5
 
 
 async def answer_question(

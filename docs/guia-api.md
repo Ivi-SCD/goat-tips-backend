@@ -237,8 +237,14 @@ curl $BASE/matches/toplist
 
 Previsão estatística por nome dos times. **Não requer partida ao vivo.**
 
+Aceita `?referee=` para ajuste de árbitro (±8% nos λ baseado em histórico do árbitro):
+
 ```bash
+# Previsão básica
 curl "$BASE/predictions/?home=Arsenal&away=Chelsea"
+
+# Com ajuste de árbitro
+curl "$BASE/predictions/?home=Arsenal&away=Chelsea&referee=Michael+Oliver"
 ```
 
 **Resposta:**
@@ -275,6 +281,79 @@ curl "$BASE/predictions/?home=Arsenal&away=Chelsea"
 - `score_matrix`: heatmap de probabilidades de placar (7×7)
 - `over_2_5_prob`: "mais de 2.5 gols: 54% de chance"
 - `btts_prob`: "ambos marcam: 57% de chance"
+
+---
+
+---
+
+### `GET /predictions/inplay`
+
+**Previsão Bayesiana in-play** — recalcula probabilidades de resultado final dado o estado atual da partida.
+
+```bash
+# Arsenal 1-0 Chelsea, minuto 70
+curl "$BASE/predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70"
+
+# Com árbitro
+curl "$BASE/predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70&referee=Michael+Oliver"
+```
+
+**Query params:**
+| Param | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `home` | string | Sim | Time mandante |
+| `away` | string | Sim | Time visitante |
+| `home_goals` | int (≥0) | Sim | Gols atuais do mandante |
+| `away_goals` | int (≥0) | Sim | Gols atuais do visitante |
+| `minute` | int (1–90) | Sim | Minuto atual do jogo |
+| `referee` | string | Não | Nome do árbitro para ajuste de λ |
+
+**Retorna o mesmo schema do `GET /predictions/`**, mas com `lambda_home`/`lambda_away` representando os **gols esperados no tempo restante** (não no jogo inteiro).
+
+**Como funciona:**
+1. Calcula λ pré-jogo normalmente (com xG e árbitro)
+2. Escala por tempo restante: `λ_rem = λ_full × (90 - minute) / 90`
+3. Distribui gols **adicionais** com Poisson(λ_rem), deslocando pelo placar atual
+4. `model_note` inclui: `"In-play Bayesian — 70' (1-0). λ restante: home=0.52, away=0.39"`
+
+**Exemplo de resposta (Arsenal 1-0 Chelsea, 70'):**
+```json
+{
+  "home_team": "Arsenal",
+  "away_team": "Chelsea",
+  "lambda_home": 0.521,
+  "lambda_away": 0.387,
+  "home_win_prob": 0.8490,
+  "draw_prob": 0.1340,
+  "away_win_prob": 0.0170,
+  "most_likely_score": "1-0",
+  "model_note": "In-play Bayesian — 70' (1-0). λ restante: home=0.52, away=0.39. Base: 4495 jogos PL."
+}
+```
+
+**Evolução das probabilidades (Arsenal 1-0 Chelsea):**
+| Minuto | Home Win | Draw | Away Win |
+|--------|----------|------|----------|
+| Pré-jogo | 54.8% | 22.1% | 23.1% |
+| 30' | 77.7% | 15.8% | 6.5% |
+| 70' | 84.9% | 13.4% | 1.7% |
+| 85' | 94.7% | 5.2% | 0.2% |
+
+**Quando usar:** Widget "probabilidades ao vivo" no card de partida. Atualizar a cada ~30s sincronizado com o polling de placar.
+
+---
+
+### `GET /predictions/{event_id}/inplay`
+
+**In-play automático** — obtém placar e minuto diretamente da BetsAPI, sem precisar passar os valores manualmente.
+
+```bash
+curl $BASE/predictions/12345678/inplay
+```
+
+- Se a partida estiver **ao vivo**: usa `score_home`, `score_away`, `minute` e `referee` da BetsAPI
+- Se ainda **não iniciou**: retorna a previsão pré-jogo normal (fallback automático)
+- `model_note` indica qual modo foi usado
 
 ---
 
@@ -642,6 +721,56 @@ curl "$BASE/analytics/teams/Arsenal/profile"
 
 ---
 
+### `GET /analytics/model/calibration?n=500`
+
+**Backtesting do modelo Poisson** — avalia a qualidade das probabilidades nos últimos N jogos encerrados.
+
+```bash
+curl "$BASE/analytics/model/calibration?n=500"
+```
+
+**Query params:**
+| Param | Tipo | Default | Descrição |
+|---|---|---|---|
+| `n` | int (50–4000) | 500 | Número de jogos recentes para backtest |
+
+**Como funciona:**
+1. Pega os últimos N jogos encerrados do dataset
+2. Para cada jogo, faz a previsão **sem usar esse jogo no treino** (leave-last-N-out)
+3. Compara a probabilidade prevista com o resultado real
+4. Calcula Brier Score por mercado e bins de calibração
+
+**Resposta:**
+```json
+{
+  "n_matches": 500,
+  "markets": {
+    "home_win":  { "brier_score": 0.2161, "avg_predicted": 0.452, "avg_actual": 0.460 },
+    "draw":      { "brier_score": 0.1886, "avg_predicted": 0.248, "avg_actual": 0.241 },
+    "away_win":  { "brier_score": 0.2003, "avg_predicted": 0.300, "avg_actual": 0.299 },
+    "over_2_5":  { "brier_score": 0.2387, "avg_predicted": 0.537, "avg_actual": 0.528 },
+    "btts":      { "brier_score": 0.2431, "avg_predicted": 0.523, "avg_actual": 0.510 }
+  },
+  "calibration_bins": {
+    "home_win": [
+      { "bin": "0.0-0.1", "avg_predicted": 0.07, "avg_actual": 0.06, "n": 12 },
+      { "bin": "0.4-0.5", "avg_predicted": 0.45, "avg_actual": 0.47, "n": 89 }
+    ]
+  }
+}
+```
+
+**Interpretando o Brier Score:**
+- `0.0` = perfeito (impossível na prática)
+- `0.25` = modelo sem poder discriminativo (equivale a prever 50% sempre)
+- `< 0.22` = bom modelo preditivo ← **nossos resultados estão nessa faixa**
+
+**Quando usar:** Dashboard interno de monitoramento do modelo, validação após retreinamento.
+
+**Nota:** Primeira chamada leva ~10s (cálculo não cacheado por padrão). Para produção, considere cache de 24h.
+
+---
+
 ## Polling — Como Atualizar o Frontend
 
 | Dado | Endpoint | Intervalo recomendado |
@@ -653,7 +782,9 @@ curl "$BASE/analytics/teams/Arsenal/profile"
 | Risk scores | `GET /analytics/risk-scores` | Calculado localmente com o minuto atual |
 | Perfil do árbitro | `GET /analytics/referees/{name}/stats` | Uma vez antes do jogo |
 | Perfil do time | `GET /analytics/teams/{name}/profile` | Uma vez por sessão |
+| Probabilidades in-play | `GET /predictions/{id}/inplay` | 30 s (sincronizar com polling de placar) |
 | Narrativa completa | `GET /predictions/{id}/full-analysis` | Sob demanda (botão) |
+| Calibração do modelo | `GET /analytics/model/calibration` | Uma vez por semana / após retrain |
 
 > **Dica:** O `full-analysis` não deve ser chamado no polling — é caro (LLM). Acione sob demanda ou uma vez por jogo.
 
@@ -692,6 +823,15 @@ Obtém do full-analysis:
 
 Ou calcula dinamicamente:
   GET /analytics/risk-scores?minute={minuto_atual}&score_diff={h-a}
+```
+
+### Widget: "Probabilidades ao Vivo"
+
+```
+1. GET /predictions/{id}/inplay               → probabilidades atualizadas pelo placar
+2. Exibir barra home_win / draw / away_win    → atualiza a cada 30s com o polling de placar
+3. Exibir model_note para contexto (ex: "In-play Bayesian — 70' (1-0)")
+4. Fallback: se jogo ainda não iniciou, exibir previsão pré-jogo normal
 ```
 
 ### Widget: "Chat da Partida"
@@ -748,3 +888,8 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `first_half_pct` | float 0–1 | Proporção de gols marcados no 1º tempo |
 | `avg_yellow_cards` | float | Média de cartões amarelos/jogo do árbitro |
 | `home_win_rate` (árbitro) | float 0–1 | Taxa de vitória do mandante com este árbitro |
+| `referee` | string (query param) | Nome do árbitro para ajuste de λ (±8% baseado em 3,715 jogos) |
+| `home_goals` / `away_goals` | int | Gols atuais para previsão in-play |
+| `minute` | int 1–90 | Minuto atual do jogo para previsão in-play |
+| `brier_score` | float 0–0.25 | Erro quadrático médio (menor = melhor, <0.22 = modelo bom) |
+| `lambda_home` (in-play) | float | Gols esperados do mandante **no tempo restante** (não no jogo inteiro) |
