@@ -12,13 +12,17 @@ from pydantic import BaseModel
 
 from app.services import betsapi
 from app.services import conversation
-from app.services.narrative import generate_narrative, answer_question
+from app.services.narrative import generate_narrative, answer_question, answer_general_question
 from app.services.predictor import predict_match, predict_from_match_context, ScorePrediction
 from app.schemas.match import MatchContext, NarrativeResponse
 from app.schemas.prediction import ScorePredictionResponse
 from app.schemas.agent import FullMatchAnalysis
 
 router = APIRouter(prefix="/predictions", tags=["Previsões"])
+
+
+class QuestionRequest(BaseModel):
+    question: str
 
 
 def _pred_to_response(raw: ScorePrediction) -> ScorePredictionResponse:
@@ -32,6 +36,41 @@ def _pred_to_response(raw: ScorePrediction) -> ScorePredictionResponse:
         top_scores=raw.top_scores, score_matrix=raw.score_matrix,
         confidence=raw.confidence, model_note=raw.model_note,
     )
+
+
+@router.post("/ask", response_model=NarrativeResponse,
+             summary="Pergunta geral sobre a Premier League (sem partida específica)")
+async def ask_general(
+    body: QuestionRequest,
+    session_id: Optional[str] = Query(
+        default=None,
+        description="ID de sessão para manter histórico. Gere um UUID no frontend e reutilize.",
+    ),
+):
+    """
+    Responde qualquer pergunta sobre Premier League sem necessidade de event_id.
+
+    O assistente pode buscar na web, consultar o banco de dados histórico e a BetsAPI
+    automaticamente conforme necessário para responder.
+
+    Exemplos:
+    - "Qual é o próximo jogo do Arsenal?"
+    - "Quem é o árbitro da próxima rodada?"
+    - "Como está a forma do Liverpool nos últimos jogos?"
+    - "Quais são as odds para Manchester City x Chelsea?"
+    """
+    history = await conversation.load_history(session_id, "general") if session_id else []
+    response = await answer_general_question(body.question, history=history)
+
+    if session_id:
+        await conversation.save_turn(
+            session_id=session_id,
+            event_id="general",
+            question=body.question,
+            response_headline=response.headline,
+            response_analysis=response.analysis,
+        )
+    return response
 
 
 @router.get("/", response_model=ScorePredictionResponse, summary="Prever por nome dos times")
@@ -102,10 +141,6 @@ async def get_narrative(event_id: str):
     if not match:
         raise HTTPException(status_code=404, detail="Partida não encontrada")
     return await generate_narrative(match)
-
-
-class QuestionRequest(BaseModel):
-    question: str
 
 
 @router.post("/{event_id}/ask", response_model=NarrativeResponse,

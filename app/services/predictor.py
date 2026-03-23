@@ -7,6 +7,12 @@ scripts/train_model.py).  Falls back to fitting inline if the file is absent.
 Algorithm:  Independent Poisson Goals (Dixon-Coles 1997 framework)
   λ_home = attack_home × defense_away × league_avg_home_goals
   λ_away = attack_away × defense_home × league_avg_away_goals
+
+Improvements:
+  P1: Dixon-Coles ρ correction for low-scoring cells (0-0, 1-0, 0-1, 1-1)
+  P2: Time-decay weighting in _fit_inline() (half-life 1 year)
+  P3: Separate home/away attack/defense in TeamStrength
+  P6: Normalize matrix after Dixon-Coles correction
 """
 
 import logging
@@ -23,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_PKL = Path(__file__).parent.parent.parent / "models" / "poisson_model.pkl"
 MAX_GOALS = 7
+RHO = 0.04  # Dixon-Coles correction parameter
 
 
 def _download_from_cos() -> bool:
@@ -57,6 +64,10 @@ def _download_from_cos() -> bool:
 class TeamStrength:
     attack: float = 1.0
     defense: float = 1.0
+    attack_home: Optional[float] = None
+    attack_away: Optional[float] = None
+    defense_home: Optional[float] = None
+    defense_away: Optional[float] = None
 
 
 @dataclass
@@ -87,6 +98,17 @@ class ScorePrediction:
     model_note: str
 
 
+# ── Dixon-Coles tau correction ────────────────────────────────────────────────
+
+def _tau(h: int, a: int, lh: float, la: float, rho: float) -> float:
+    """Dixon-Coles low-score correction factor."""
+    if h == 0 and a == 0: return 1 - lh * la * rho
+    elif h == 0 and a == 1: return 1 + lh * rho
+    elif h == 1 and a == 0: return 1 + la * rho
+    elif h == 1 and a == 1: return 1 - rho
+    return 1.0
+
+
 # ── Model loading ─────────────────────────────────────────────────────────────
 
 def _load_from_pkl() -> Optional[PoissonModel]:
@@ -115,7 +137,7 @@ def _load_from_pkl() -> Optional[PoissonModel]:
 
 
 def _fit_inline() -> PoissonModel:
-    """Fallback: fit the model from raw CSV data."""
+    """Fallback: fit the model from raw CSV data with time-decay weighting and home/away split."""
     import pandas as pd
     data_path = Path(__file__).parent.parent.parent / "data" / "betsapi" / "premier_league_events.csv"
     df = pd.read_csv(data_path, low_memory=False)
@@ -124,34 +146,73 @@ def _fit_inline() -> PoissonModel:
     df["away_score"] = pd.to_numeric(df["away_score"], errors="coerce")
     df = df.dropna(subset=["home_score", "away_score"])
 
+    # P2: Time-decay weights (half-life = 1 year)
+    now_ts = float(pd.Timestamp.now().timestamp())
+    df["time_unix"] = pd.to_numeric(df["time_unix"], errors="coerce").fillna(now_ts)
+    df["weight"] = np.power(0.5, (now_ts - df["time_unix"].astype(float)) / (365.25 * 86400))
+
     n = len(df)
-    avg_h = df["home_score"].mean()
-    avg_a = df["away_score"].mean()
-    avg_tot = (avg_h + avg_a) / 2
 
-    home_stats = df.groupby("home_team_name").agg(
-        hs=("home_score", "sum"), hc=("away_score", "sum"), hm=("home_score", "count"))
-    away_stats = df.groupby("away_team_name").agg(
-        as_=("away_score", "sum"), ac=("home_score", "sum"), am=("away_score", "count"))
+    # Weighted league averages
+    total_weight = df["weight"].sum()
+    avg_h = float((df["home_score"] * df["weight"]).sum() / total_weight)
+    avg_a = float((df["away_score"] * df["weight"]).sum() / total_weight)
 
+    # P3: Separate home/away attack/defense per team
     strengths = {}
-    for team in set(home_stats.index) | set(away_stats.index):
-        scored = conceded = matches = 0
-        if team in home_stats.index:
-            r = home_stats.loc[team]
-            scored += r["hs"]; conceded += r["hc"]; matches += r["hm"]
-        if team in away_stats.index:
-            r = away_stats.loc[team]
-            scored += r["as_"]; conceded += r["ac"]; matches += r["am"]
-        if matches:
-            strengths[team] = TeamStrength(
-                attack=max(scored / matches / avg_tot, 0.1),
-                defense=max(conceded / matches / avg_tot, 0.1),
-            )
-        else:
-            strengths[team] = TeamStrength()
+    all_teams = set(df["home_team_name"].dropna().unique()) | set(df["away_team_name"].dropna().unique())
 
-    logger.info("Predictor: fitted inline on %d matches", n)
+    for team in all_teams:
+        home_rows = df[df["home_team_name"] == team]
+        away_rows = df[df["away_team_name"] == team]
+
+        # Home attack / defense
+        if not home_rows.empty:
+            w_home = home_rows["weight"].sum()
+            attack_home = float((home_rows["home_score"] * home_rows["weight"]).sum() / w_home / avg_h) if avg_h > 0 else 1.0
+            defense_home = float((home_rows["away_score"] * home_rows["weight"]).sum() / w_home / avg_a) if avg_a > 0 else 1.0
+        else:
+            attack_home = 1.0
+            defense_home = 1.0
+
+        # Away attack / defense
+        if not away_rows.empty:
+            w_away = away_rows["weight"].sum()
+            attack_away = float((away_rows["away_score"] * away_rows["weight"]).sum() / w_away / avg_a) if avg_a > 0 else 1.0
+            defense_away = float((away_rows["home_score"] * away_rows["weight"]).sum() / w_away / avg_h) if avg_h > 0 else 1.0
+        else:
+            attack_away = 1.0
+            defense_away = 1.0
+
+        # Combined (backward-compatible fallback)
+        all_rows = pd.concat([home_rows, away_rows])
+        w_total = all_rows["weight"].sum()
+        if w_total > 0:
+            scored = float((
+                (home_rows["home_score"] * home_rows["weight"]).sum() +
+                (away_rows["away_score"] * away_rows["weight"]).sum()
+            ) / w_total)
+            conceded = float((
+                (home_rows["away_score"] * home_rows["weight"]).sum() +
+                (away_rows["home_score"] * away_rows["weight"]).sum()
+            ) / w_total)
+            avg_tot = (avg_h + avg_a) / 2
+            attack_combined = max(scored / avg_tot, 0.1) if avg_tot > 0 else 1.0
+            defense_combined = max(conceded / avg_tot, 0.1) if avg_tot > 0 else 1.0
+        else:
+            attack_combined = 1.0
+            defense_combined = 1.0
+
+        strengths[team] = TeamStrength(
+            attack=attack_combined,
+            defense=defense_combined,
+            attack_home=max(attack_home, 0.1),
+            attack_away=max(attack_away, 0.1),
+            defense_home=max(defense_home, 0.1),
+            defense_away=max(defense_away, 0.1),
+        )
+
+    logger.info("Predictor: fitted inline on %d matches (time-decay, home/away split)", n)
     return PoissonModel(team_strengths=strengths, league_avg_home_goals=avg_h,
                         league_avg_away_goals=avg_a, fitted=True, n_matches=n)
 
@@ -189,13 +250,27 @@ def predict_match(home_team: str, away_team: str) -> ScorePrediction:
     home_str = model.team_strengths.get(home_key, TeamStrength()) if home_key else TeamStrength()
     away_str = model.team_strengths.get(away_key, TeamStrength()) if away_key else TeamStrength()
 
-    lh = home_str.attack * away_str.defense * model.league_avg_home_goals
-    la = away_str.attack * home_str.defense * model.league_avg_away_goals
+    # P3: Use home/away specific strengths with fallback to combined
+    home_attack = home_str.attack_home or home_str.attack
+    away_defense = away_str.defense_away or away_str.defense
+    away_attack = away_str.attack_away or away_str.attack
+    home_defense = home_str.defense_home or home_str.defense
+
+    lh = home_attack * away_defense * model.league_avg_home_goals
+    la = away_attack * home_defense * model.league_avg_away_goals
 
     n = MAX_GOALS
     hp = np.array([poisson.pmf(k, lh) for k in range(n)])
     ap = np.array([poisson.pmf(k, la) for k in range(n)])
     mat = np.outer(hp, ap)
+
+    # P1: Dixon-Coles ρ correction for low-scoring cells
+    for h_goals in range(2):
+        for a_goals in range(2):
+            mat[h_goals, a_goals] *= _tau(h_goals, a_goals, lh, la, RHO)
+
+    # P6: Normalize after Dixon-Coles correction
+    mat /= mat.sum()
 
     home_win = float(np.sum(np.tril(mat, k=-1)))
     draw = float(np.trace(mat))
@@ -213,7 +288,7 @@ def predict_match(home_team: str, away_team: str) -> ScorePrediction:
     if not away_key:
         unknown.append(f"'{away_team}' fora do dataset")
     confidence = "Alta" if (home_key and away_key) else ("Média" if (home_key or away_key) else "Baixa")
-    note = f"Modelo Poisson — {model.n_matches} jogos PL 2014–2026."
+    note = f"Modelo Poisson+DC — {model.n_matches} jogos PL 2014–2026."
     if unknown:
         note += " Atenção: " + "; ".join(unknown) + " — usando médias da liga."
 

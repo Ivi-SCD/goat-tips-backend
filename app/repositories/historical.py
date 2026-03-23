@@ -33,6 +33,28 @@ logger = logging.getLogger(__name__)
 
 _BASE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "betsapi")
 
+# Canonical aliases: maps common long/alternative names → CSV stored names
+_ALIASES: dict[str, str] = {
+    "manchester city": "man city",
+    "manchester united": "man utd",
+    "nottingham forest": "nottm forest",
+    "sheffield united": "sheff utd",
+    "west bromwich albion": "west brom",
+    "wolverhampton wanderers": "wolverhampton",
+    "wolves": "wolverhampton",
+    "spurs": "tottenham",
+    "newcastle united": "newcastle",
+    "west ham united": "west ham",
+    "leeds united": "leeds",
+    "brighton & hove albion": "brighton",
+}
+
+
+def _normalize(name: str) -> str:
+    """Normalize team name to match CSV stored values."""
+    lower = name.lower().strip()
+    return _ALIASES.get(lower, lower)
+
 # ── Cache globals ─────────────────────────────────────────────────────────────
 _events_df: Optional[pd.DataFrame] = None
 _stats_df: Optional[pd.DataFrame] = None
@@ -89,7 +111,7 @@ def get_team_events(team_name: str, ended_only: bool = True) -> pd.DataFrame:
     if ended_only:
         events = events[events["time_status"] == 3]
 
-    lower = team_name.lower()
+    lower = _normalize(team_name)
     home_mask = events["home_team_name"].str.lower() == lower
     away_mask = events["away_team_name"].str.lower() == lower
     mask = home_mask | away_mask
@@ -107,15 +129,18 @@ def get_h2h_events(home_team: str, away_team: str) -> pd.DataFrame:
     """Returns ended events between two specific teams (either home/away)."""
     events = load_events()
     events = events[events["time_status"] == 3]
-    h = home_team.lower()
-    a = away_team.lower()
-    mask = (
-        (events["home_team_name"].str.lower() == h) &
-        (events["away_team_name"].str.lower() == a)
-    ) | (
-        (events["home_team_name"].str.lower() == a) &
-        (events["away_team_name"].str.lower() == h)
-    )
+    h = _normalize(home_team)
+    a = _normalize(away_team)
+
+    def _match(col: str, name: str) -> pd.Series:
+        lower_col = events[col].str.lower()
+        exact = lower_col == name
+        if exact.any():
+            return exact
+        return lower_col.str.contains(name, na=False, regex=False)
+
+    mask = (_match("home_team_name", h) & _match("away_team_name", a)) | \
+           (_match("home_team_name", a) & _match("away_team_name", h))
     return events[mask].sort_values("time_unix", ascending=False).copy()
 
 
@@ -140,3 +165,44 @@ def get_timeline_cards() -> tuple[pd.DataFrame, pd.DataFrame]:
 def count_ended_matches() -> int:
     events = load_events()
     return int((events["time_status"] == 3).sum())
+
+
+def get_all_referees() -> list[str]:
+    """Returns sorted list of unique referee names."""
+    events = load_events()
+    return sorted(events["referee_name"].dropna().unique().tolist())
+
+
+def get_referee_events(referee_name: str) -> pd.DataFrame:
+    """Returns all ended events officiated by this referee (partial match fallback)."""
+    events = load_events()
+    events = events[events["time_status"] == 3]
+    lower = referee_name.lower()
+    mask = events["referee_name"].str.lower() == lower
+    if not mask.any():
+        mask = events["referee_name"].str.lower().str.contains(lower, na=False)
+    return events[mask].copy()
+
+
+def get_team_stat_values(team_name: str, metrics: list) -> pd.DataFrame:
+    """
+    Returns a DataFrame with columns: event_id, metric, team_value, opponent_value, is_home.
+    Joins events for team_name with the stats CSV, filtered to given metrics.
+    """
+    events = get_team_events(team_name)
+    if events.empty:
+        return pd.DataFrame()
+    stats = load_stats()
+    lower = team_name.lower()
+    merged = stats[stats["event_id"].isin(events["event_id"]) & stats["metric"].isin(metrics)].merge(
+        events[["event_id", "home_team_name", "away_team_name"]],
+        on="event_id", how="left"
+    )
+    merged["is_home"] = merged["home_team_name"].str.lower() == lower
+    merged["team_value"] = merged.apply(
+        lambda r: r["home_value"] if r["is_home"] else r["away_value"], axis=1
+    )
+    merged["opponent_value"] = merged.apply(
+        lambda r: r["away_value"] if r["is_home"] else r["home_value"], axis=1
+    )
+    return merged[["event_id", "metric", "team_value", "opponent_value", "is_home"]].copy()

@@ -237,6 +237,168 @@ def calculate_card_risk_score(minute: Optional[int],
     return round(min(max(base + yellow_risk + urgency, 0.0), 10.0), 2)
 
 
+def get_team_profile(team_name: str) -> Optional[dict]:
+    """
+    Extended team profile: shot efficiency, goals by half, home/away splits.
+    Uses stats CSV for shots/xg, timeline for half-time goal distribution.
+    """
+    from app.repositories.historical import get_team_stat_values, get_team_events, get_timeline_goals
+
+    events = get_team_events(team_name)
+    if events.empty:
+        return None
+
+    lower = team_name.lower()
+    # Resolve actual name
+    actual_name = team_name
+    if not events.empty:
+        r = events.iloc[0]
+        if str(r.get("home_team_name", "")).lower() == lower:
+            actual_name = r["home_team_name"]
+        elif str(r.get("away_team_name", "")).lower() == lower:
+            actual_name = r["away_team_name"]
+
+    n = len(events)
+
+    # ── Shot efficiency from stats CSV ──────────────────────────────
+    stat_df = get_team_stat_values(team_name, ["on_target", "goals", "xg"])
+
+    shots = stat_df[stat_df["metric"] == "on_target"]["team_value"].apply(pd.to_numeric, errors="coerce").dropna()
+    goals_stats = stat_df[stat_df["metric"] == "goals"]["team_value"].apply(pd.to_numeric, errors="coerce").dropna()
+    xg_vals = stat_df[stat_df["metric"] == "xg"]["team_value"].apply(pd.to_numeric, errors="coerce").dropna()
+
+    avg_shots = round(float(shots.mean()), 2) if not shots.empty else 0.0
+    avg_goals_stat = round(float(goals_stats.mean()), 2) if not goals_stats.empty else 0.0
+    avg_xg = round(float(xg_vals.mean()), 2) if not xg_vals.empty else 0.0
+    shot_eff = round(avg_goals_stat / avg_shots, 3) if avg_shots > 0 else 0.0
+
+    # ── Goals by half from timeline ──────────────────────────────────
+    goals_tl = get_timeline_goals()
+    team_event_ids = set(events["event_id"].astype(str).tolist())
+    team_goals = goals_tl[goals_tl["event_id"].astype(str).isin(team_event_ids)].copy()
+    team_goals["minute"] = team_goals["text"].apply(_extract_minute)
+    team_goals = team_goals.dropna(subset=["minute"])
+    team_goals["minute"] = team_goals["minute"].astype(int)
+
+    # Filter to only goals scored by this team (text contains team name)
+    # Fallback: use all goals in their matches divided by 2
+    first_half = int((team_goals["minute"] <= 45).sum())
+    second_half = int((team_goals["minute"] > 45).sum())
+    total_goals_half = first_half + second_half
+    goals_per_match = total_goals_half / n if n else 0
+    fh_avg = round(first_half / n, 2) if n else 0.0
+    sh_avg = round(second_half / n, 2) if n else 0.0
+    fh_pct = round(first_half / total_goals_half, 3) if total_goals_half else 0.5
+
+    # ── Home vs Away splits ──────────────────────────────────────────
+    home_events = events[events["home_team_name"].str.lower() == lower].copy()
+    away_events = events[events["away_team_name"].str.lower() == lower].copy()
+
+    def _win_rate(df_side, scored_col, conceded_col):
+        if df_side.empty:
+            return 0.0
+        wins = ((df_side[scored_col].fillna(0).astype(int)) > (df_side[conceded_col].fillna(0).astype(int))).sum()
+        return round(int(wins) / len(df_side), 3)
+
+    home_win_rate = _win_rate(home_events, "home_score", "away_score")
+    away_win_rate = _win_rate(away_events, "away_score", "home_score")
+
+    home_goals_avg = round(home_events["home_score"].fillna(0).astype(int).mean(), 2) if not home_events.empty else 0.0
+    away_goals_avg = round(away_events["away_score"].fillna(0).astype(int).mean(), 2) if not away_events.empty else 0.0
+
+    return {
+        "team_name": actual_name,
+        "sample_size": n,
+        "avg_shots_on_target": avg_shots,
+        "avg_goals_scored": avg_goals_stat,
+        "shot_efficiency": shot_eff,
+        "avg_xg": avg_xg,
+        "goals_by_half": {
+            "first_half_avg": fh_avg,
+            "second_half_avg": sh_avg,
+            "first_half_pct": fh_pct,
+        },
+        "home_win_rate": home_win_rate,
+        "away_win_rate": away_win_rate,
+        "home_goals_avg": float(home_goals_avg),
+        "away_goals_avg": float(away_goals_avg),
+    }
+
+
+def get_referee_stats(referee_name: str) -> Optional[dict]:
+    """Returns per-game averages for a referee: cards, fouls, home win rate."""
+    from app.repositories.historical import get_referee_events, load_stats
+
+    events = get_referee_events(referee_name)
+    if events.empty:
+        return None
+
+    actual_name = str(events.iloc[0].get("referee_name", referee_name))
+    n = len(events)
+    event_ids = events["event_id"].tolist()
+
+    stats = load_stats()
+    ref_stats = stats[stats["event_id"].isin(event_ids)]
+
+    def _avg_metric(metric: str, col: str) -> float:
+        vals = ref_stats[ref_stats["metric"] == metric][col].apply(
+            pd.to_numeric, errors="coerce").dropna()
+        if vals.empty:
+            return 0.0
+        return round(float(vals.sum()) / n, 2)
+
+    avg_yellow = round(
+        (_avg_metric("yellowcards", "home_value") * n +
+         _avg_metric("yellowcards", "away_value") * n) / n, 2
+    )
+    avg_red = round(
+        (_avg_metric("redcards", "home_value") * n +
+         _avg_metric("redcards", "away_value") * n) / n, 2
+    )
+    avg_fouls = round(
+        (_avg_metric("fouls", "home_value") * n +
+         _avg_metric("fouls", "away_value") * n) / n, 2
+    )
+
+    # Simpler approach: sum both sides
+    yc = ref_stats[ref_stats["metric"] == "yellowcards"]
+    if not yc.empty:
+        yc_home = pd.to_numeric(yc["home_value"], errors="coerce").fillna(0).sum()
+        yc_away = pd.to_numeric(yc["away_value"], errors="coerce").fillna(0).sum()
+        avg_yellow = round(float(yc_home + yc_away) / n, 2)
+
+    rc = ref_stats[ref_stats["metric"] == "redcards"]
+    if not rc.empty:
+        rc_home = pd.to_numeric(rc["home_value"], errors="coerce").fillna(0).sum()
+        rc_away = pd.to_numeric(rc["away_value"], errors="coerce").fillna(0).sum()
+        avg_red = round(float(rc_home + rc_away) / n, 2)
+
+    fouls_df = ref_stats[ref_stats["metric"] == "fouls"]
+    if not fouls_df.empty:
+        f_home = pd.to_numeric(fouls_df["home_value"], errors="coerce").fillna(0).sum()
+        f_away = pd.to_numeric(fouls_df["away_value"], errors="coerce").fillna(0).sum()
+        avg_fouls = round(float(f_home + f_away) / n, 2)
+
+    hs = pd.to_numeric(events["home_score"], errors="coerce")
+    as_ = pd.to_numeric(events["away_score"], errors="coerce")
+    home_wins = int((hs > as_).sum())
+    home_win_rate = round(home_wins / n, 3)
+
+    return {
+        "referee_name": actual_name,
+        "matches": n,
+        "avg_yellow_cards": avg_yellow,
+        "avg_red_cards": avg_red,
+        "avg_fouls": avg_fouls,
+        "home_win_rate": home_win_rate,
+    }
+
+
+def get_all_referees() -> list[str]:
+    from app.repositories.historical import get_all_referees as _repo
+    return _repo()
+
+
 def get_team_historical_stats(team_name: str) -> dict:
     form = get_team_form(team_name, n=50)
     if not form:

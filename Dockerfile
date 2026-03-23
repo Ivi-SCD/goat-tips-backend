@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir --timeout 300 -r requirements.txt
 COPY app/ ./app/
 COPY models/ ./models/
 COPY data/ ./data/
+COPY config/ ./config/
 
 EXPOSE 8000
 

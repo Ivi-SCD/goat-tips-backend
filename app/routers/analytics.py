@@ -9,7 +9,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services import analytics
-from app.schemas.analytics import TeamForm, H2HRecord, GoalPatterns, CardPatterns
+from app.schemas.analytics import TeamForm, H2HRecord, GoalPatterns, CardPatterns, TeamProfile, RefereeStats
 
 router = APIRouter(prefix="/analytics", tags=["Analytics Histórico"])
 
@@ -81,6 +81,40 @@ async def get_card_patterns():
     Resultado cacheado — resposta instantânea após o primeiro acesso.
     """
     return await asyncio.to_thread(analytics.get_card_patterns)
+
+
+@router.get("/referees", summary="Listar todos os árbitros")
+async def list_referees():
+    """Lista todos os árbitros no dataset histórico da Premier League (2014–2026)."""
+    referees = await asyncio.to_thread(analytics.get_all_referees)
+    return {"referees": referees, "total": len(referees)}
+
+
+@router.get("/referees/{referee_name}/stats", summary="Estatísticas do árbitro")
+async def get_referee_stats(referee_name: str):
+    """
+    Estatísticas históricas de um árbitro: média de cartões amarelos/vermelhos e faltas por jogo.
+    Nome é case-insensitive e suporta correspondência parcial.
+    """
+    stats = await asyncio.to_thread(analytics.get_referee_stats, referee_name)
+    if not stats:
+        raise HTTPException(404, detail=f"Árbitro '{referee_name}' não encontrado no dataset")
+    return stats
+
+
+@router.get("/teams/{team_name}/profile", summary="Perfil completo do time")
+async def get_team_profile(team_name: str):
+    """
+    Perfil avançado do time incluindo:
+    - Shot efficiency (gols / chutes no alvo)
+    - xG médio por jogo
+    - Distribuição de gols por half (1T vs 2T)
+    - Taxa de vitória e média de gols em casa vs fora
+    """
+    profile = await asyncio.to_thread(analytics.get_team_profile, team_name)
+    if not profile:
+        raise HTTPException(404, detail=f"Time '{team_name}' não encontrado no dataset")
+    return profile
 
 
 @router.get("/risk-scores", summary="Scores de risco ao vivo")
