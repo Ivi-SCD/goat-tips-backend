@@ -1,0 +1,20 @@
+{
+  "league_id": 94,
+  "events_total": 4585,
+  "events_processed": 4585,
+  "events_failed": 0,
+  "stats_rows": 86554,
+  "timeline_rows": 229549,
+  "odds_rows": 4548239,
+  "elapsed_seconds": 624.2,
+  "avg_events_per_s": 7.35,
+  "files": {
+    "events": "data/betsapi/premier_league_events.csv",
+    "teams": "data/betsapi/premier_league_teams.csv",
+    "table": "data/betsapi/premier_league_table.csv",
+    "stats": "data/betsapi/premier_league_stats.csv",
+    "timeline": "data/betsapi/premier_league_timeline.csv",
+    "odds": "data/betsapi/premier_league_odds.csv",
+    "failed": "data/betsapi/premier_league_failed.csv"
+  }
+}

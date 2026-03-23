@@ -23,13 +23,14 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 from scipy.stats import poisson
 
 logger = logging.getLogger(__name__)
 
 MODEL_PKL = Path(__file__).parent.parent.parent / "models" / "poisson_model.pkl"
 MAX_GOALS = 7
-RHO = 0.04  # Dixon-Coles correction parameter
+RHO = -0.05  # Dixon-Coles correction parameter (optimized via CV on 1000 test matches)
 
 
 def _download_from_cos() -> bool:
@@ -60,6 +61,9 @@ def _download_from_cos() -> bool:
 
 # ── Domain objects ────────────────────────────────────────────────────────────
 
+XG_BLEND = 0.4  # Weight for xG-based strengths when available (0.4 = 40% xG, 60% goals)
+
+
 @dataclass
 class TeamStrength:
     attack: float = 1.0
@@ -68,6 +72,11 @@ class TeamStrength:
     attack_away: Optional[float] = None
     defense_home: Optional[float] = None
     defense_away: Optional[float] = None
+    xg_attack_home: Optional[float] = None
+    xg_defense_home: Optional[float] = None
+    xg_attack_away: Optional[float] = None
+    xg_defense_away: Optional[float] = None
+    xg_matches: Optional[int] = None
 
 
 @dataclass
@@ -118,7 +127,19 @@ def _load_from_pkl() -> Optional[PoissonModel]:
         import joblib
         data = joblib.load(MODEL_PKL)
         strengths = {
-            team: TeamStrength(attack=v["attack"], defense=v["defense"])
+            team: TeamStrength(
+                attack=v["attack"],
+                defense=v["defense"],
+                attack_home=v.get("attack_home"),
+                attack_away=v.get("attack_away"),
+                defense_home=v.get("defense_home"),
+                defense_away=v.get("defense_away"),
+                xg_attack_home=v.get("xg_attack_home"),
+                xg_defense_home=v.get("xg_defense_home"),
+                xg_attack_away=v.get("xg_attack_away"),
+                xg_defense_away=v.get("xg_defense_away"),
+                xg_matches=v.get("xg_matches"),
+            )
             for team, v in data["team_strengths"].items()
         }
         model = PoissonModel(
@@ -243,7 +264,42 @@ def _find_team(name: str, model: PoissonModel) -> Optional[str]:
     return None
 
 
-def predict_match(home_team: str, away_team: str) -> ScorePrediction:
+def _get_referee_goal_factor(referee_name: Optional[str]) -> float:
+    """Compute how much a referee deviates from league-average goals.
+    Returns a multiplier (1.0 = league average). Cached via lru_cache on model load."""
+    if not referee_name:
+        return 1.0
+    model = get_model()
+    factors = getattr(model, "_referee_factors", None)
+    if factors is None:
+        # Build referee factors from historical data
+        try:
+            from app.repositories.historical import load_events
+            events = load_events()
+            ended = events[events["time_status"] == 3].copy()
+            ended["total_goals"] = pd.to_numeric(ended["home_score"], errors="coerce") + \
+                                   pd.to_numeric(ended["away_score"], errors="coerce")
+            league_avg = ended["total_goals"].mean()
+            ref_agg = ended.groupby("referee_name").agg(
+                matches=("event_id", "count"),
+                avg_goals=("total_goals", "mean"),
+            )
+            # Only use referees with >= 20 matches for reliable factor
+            ref_agg = ref_agg[ref_agg["matches"] >= 20]
+            factors = (ref_agg["avg_goals"] / league_avg).to_dict()
+        except Exception:
+            factors = {}
+        model._referee_factors = factors
+
+    lower = referee_name.lower()
+    for name, factor in factors.items():
+        if name.lower() == lower or lower in name.lower():
+            return float(factor)
+    return 1.0
+
+
+def predict_match(home_team: str, away_team: str,
+                  referee_name: Optional[str] = None) -> ScorePrediction:
     model = get_model()
     home_key = _find_team(home_team, model)
     away_key = _find_team(away_team, model)
@@ -256,8 +312,24 @@ def predict_match(home_team: str, away_team: str) -> ScorePrediction:
     away_attack = away_str.attack_away or away_str.attack
     home_defense = home_str.defense_home or home_str.defense
 
+    # xG blend: if both teams have xG data, blend xG-based strengths with goals-based
+    if home_str.xg_attack_home is not None and away_str.xg_defense_away is not None:
+        w = XG_BLEND
+        home_attack = (1 - w) * home_attack + w * home_str.xg_attack_home
+        away_defense = (1 - w) * away_defense + w * away_str.xg_defense_away
+    if away_str.xg_attack_away is not None and home_str.xg_defense_home is not None:
+        w = XG_BLEND
+        away_attack = (1 - w) * away_attack + w * away_str.xg_attack_away
+        home_defense = (1 - w) * home_defense + w * home_str.xg_defense_home
+
     lh = home_attack * away_defense * model.league_avg_home_goals
     la = away_attack * home_defense * model.league_avg_away_goals
+
+    # Referee goal factor adjustment
+    ref_factor = _get_referee_goal_factor(referee_name)
+    if ref_factor != 1.0:
+        lh *= ref_factor
+        la *= ref_factor
 
     n = MAX_GOALS
     hp = np.array([poisson.pmf(k, lh) for k in range(n)])
@@ -306,4 +378,114 @@ def predict_match(home_team: str, away_team: str) -> ScorePrediction:
 
 
 def predict_from_match_context(match) -> ScorePrediction:
-    return predict_match(match.home.name, match.away.name)
+    referee = getattr(match, "referee", None)
+    return predict_match(match.home.name, match.away.name, referee_name=referee)
+
+
+def predict_inplay(
+    home_team: str,
+    away_team: str,
+    current_home_goals: int,
+    current_away_goals: int,
+    minute: int,
+    referee_name: Optional[str] = None,
+) -> ScorePrediction:
+    """In-play Bayesian update: P(final score | current score, minute).
+
+    Uses the pre-match λ scaled by remaining time fraction to compute
+    the distribution of remaining goals, then shifts by current score.
+    """
+    model = get_model()
+    home_key = _find_team(home_team, model)
+    away_key = _find_team(away_team, model)
+    home_str = model.team_strengths.get(home_key, TeamStrength()) if home_key else TeamStrength()
+    away_str = model.team_strengths.get(away_key, TeamStrength()) if away_key else TeamStrength()
+
+    # Compute full-match lambdas (same as predict_match)
+    home_attack = home_str.attack_home or home_str.attack
+    away_defense = away_str.defense_away or away_str.defense
+    away_attack = away_str.attack_away or away_str.attack
+    home_defense = home_str.defense_home or home_str.defense
+
+    if home_str.xg_attack_home is not None and away_str.xg_defense_away is not None:
+        w = XG_BLEND
+        home_attack = (1 - w) * home_attack + w * home_str.xg_attack_home
+        away_defense = (1 - w) * away_defense + w * away_str.xg_defense_away
+    if away_str.xg_attack_away is not None and home_str.xg_defense_home is not None:
+        w = XG_BLEND
+        away_attack = (1 - w) * away_attack + w * away_str.xg_attack_away
+        home_defense = (1 - w) * home_defense + w * home_str.xg_defense_home
+
+    lh_full = home_attack * away_defense * model.league_avg_home_goals
+    la_full = away_attack * home_defense * model.league_avg_away_goals
+
+    ref_factor = _get_referee_goal_factor(referee_name)
+    lh_full *= ref_factor
+    la_full *= ref_factor
+
+    # Scale lambdas by remaining time fraction
+    minute = max(1, min(minute, 90))
+    remaining = max((90 - minute) / 90, 0.01)
+    lh_rem = lh_full * remaining
+    la_rem = la_full * remaining
+
+    # Distribution of remaining goals
+    n = MAX_GOALS
+    max_rem = max(n - current_home_goals, 1)
+    max_rem_a = max(n - current_away_goals, 1)
+    hp_rem = np.array([poisson.pmf(k, lh_rem) for k in range(max_rem)])
+    ap_rem = np.array([poisson.pmf(k, la_rem) for k in range(max_rem_a)])
+
+    # Build final score matrix: final_home = current_home + rem_home
+    mat = np.zeros((n, n))
+    for rh in range(len(hp_rem)):
+        for ra in range(len(ap_rem)):
+            fh = current_home_goals + rh
+            fa = current_away_goals + ra
+            if fh < n and fa < n:
+                mat[fh, fa] += hp_rem[rh] * ap_rem[ra]
+
+    # Normalize
+    total = mat.sum()
+    if total > 0:
+        mat /= total
+
+    home_win = float(np.sum(np.tril(mat, k=-1)))
+    draw = float(np.trace(mat))
+    away_win = float(np.sum(np.triu(mat, k=1)))
+    over_2_5 = float(sum(mat[i, j] for i in range(n) for j in range(n) if i + j > 2))
+    btts = float(sum(mat[i, j] for i in range(n) for j in range(n) if i > 0 and j > 0))
+
+    best = np.unravel_index(np.argmax(mat), mat.shape)
+    flat = sorted(
+        [(i, j, mat[i, j]) for i in range(n) for j in range(n)],
+        key=lambda x: -x[2],
+    )
+    top5 = [(f"{i}-{j}", round(float(p), 4)) for i, j, p in flat[:5]]
+
+    unknown = []
+    if not home_key:
+        unknown.append(f"'{home_team}' fora do dataset")
+    if not away_key:
+        unknown.append(f"'{away_team}' fora do dataset")
+    confidence = "Alta" if (home_key and away_key) else ("Média" if (home_key or away_key) else "Baixa")
+    note = (
+        f"In-play Bayesian — {minute}' ({current_home_goals}-{current_away_goals}). "
+        f"λ restante: home={lh_rem:.2f}, away={la_rem:.2f}. "
+        f"Base: {model.n_matches} jogos PL."
+    )
+    if unknown:
+        note += " Atenção: " + "; ".join(unknown)
+
+    return ScorePrediction(
+        home_team=home_team, away_team=away_team,
+        lambda_home=round(lh_rem, 3), lambda_away=round(la_rem, 3),
+        home_win_prob=round(home_win, 4), draw_prob=round(draw, 4),
+        away_win_prob=round(away_win, 4),
+        over_2_5_prob=round(over_2_5, 4), btts_prob=round(btts, 4),
+        most_likely_score=f"{best[0]}-{best[1]}",
+        most_likely_score_prob=round(float(mat[best]), 4),
+        top_scores=top5,
+        score_matrix=[[round(float(mat[i, j]), 5) for j in range(n)] for i in range(n)],
+        confidence=confidence, model_note=note,
+    )

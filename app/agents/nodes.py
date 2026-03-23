@@ -116,9 +116,20 @@ async def fetch_historical_node(state: AgentState) -> dict[str, Any]:
 
     prediction = None
     try:
-        from app.services.predictor import ScorePrediction, predict_from_match_context
+        from app.services.predictor import ScorePrediction, predict_from_match_context, predict_inplay
 
-        raw: ScorePrediction = await asyncio.to_thread(predict_from_match_context, match)
+        # Use in-play prediction if match is live with valid minute and score
+        if (match.status == "live" and match.minute is not None and match.minute > 0):
+            referee = getattr(match, "referee", None)
+            raw: ScorePrediction = await asyncio.to_thread(
+                predict_inplay,
+                match.home.name, match.away.name,
+                match.score_home, match.score_away,
+                match.minute, referee,
+            )
+        else:
+            raw = await asyncio.to_thread(predict_from_match_context, match)
+
         prediction = ScorePredictionResponse(
             home_team=raw.home_team, away_team=raw.away_team,
             lambda_home=raw.lambda_home, lambda_away=raw.lambda_away,

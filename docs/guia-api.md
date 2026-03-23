@@ -1,6 +1,6 @@
 # Guia de Uso da API — Goat Tips Premier League AI
 
-> Versão 0.4.0 | Base URL: `https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud`
+> Versão 0.5.0 | Base URL: `https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud`
 > Docs interativos: `.../docs`
 
 Este guia explica como consumir cada endpoint da Goat Tips API, com exemplos de requisição, resposta e casos de uso para o frontend.
@@ -397,6 +397,22 @@ curl -X DELETE "$BASE/predictions/12345678/ask/history?session_id=550e8400-e29b-
 
 ---
 
+### `POST /predictions/ask` (sem event_id)
+
+Perguntas gerais sobre a Premier League — sem precisar de uma partida específica.
+
+```bash
+curl -X POST $BASE/predictions/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Qual árbitro aplica mais cartões amarelos esta temporada?"}'
+```
+
+**Como funciona:** O LLM usa as mesmas 7 ferramentas do endpoint com `event_id`, mas sem contexto de partida específica. Ideal para chatbots de pré-jogo, consultas sobre a liga em geral, ou quando o usuário ainda não selecionou uma partida.
+
+**Suporta `?session_id=` igual ao endpoint com `event_id`.**
+
+---
+
 ### `POST /predictions/{event_id}/narrative`
 
 Narrativa simples sem o agente completo. Mais rápida, menos contexto.
@@ -551,6 +567,81 @@ curl "$BASE/analytics/risk-scores?minute=75&score_diff=-1"
 
 ---
 
+### `GET /analytics/referees`
+
+Lista todos os árbitros presentes no dataset histórico.
+
+```bash
+curl $BASE/analytics/referees
+```
+
+**Resposta:** `{"referees": ["Andre Marriner", "Anthony Taylor", "Michael Oliver", ...], "total": 22}`
+
+---
+
+### `GET /analytics/referees/{referee_name}/stats`
+
+Estatísticas históricas de um árbitro extraídas do dataset (2014–2026).
+
+```bash
+curl "$BASE/analytics/referees/Michael Oliver/stats"
+```
+
+**Resposta:**
+```json
+{
+  "referee_name": "Michael Oliver",
+  "matches": 279,
+  "avg_yellow_cards": 3.26,
+  "avg_red_cards": 0.13,
+  "avg_fouls": 19.59,
+  "home_win_rate": 0.441
+}
+```
+
+**Quando usar:** Para enriquecer análises pré-jogo com perfil de rigor do árbitro designado.
+
+---
+
+### `GET /analytics/teams/{team_name}/profile`
+
+Perfil avançado do time com eficiência ofensiva, distribuição de gols e desempenho por mando.
+
+```bash
+curl "$BASE/analytics/teams/Arsenal/profile"
+```
+
+**Resposta:**
+```json
+{
+  "team_name": "Arsenal",
+  "sample_size": 451,
+  "avg_shots_on_target": 5.09,
+  "avg_goals_scored": 1.88,
+  "shot_efficiency": 0.369,
+  "avg_xg": 1.78,
+  "goals_by_half": {
+    "first_half_avg": 1.52,
+    "second_half_avg": 1.98,
+    "first_half_pct": 0.434
+  },
+  "home_win_rate": 0.668,
+  "away_win_rate": 0.423,
+  "home_goals_avg": 2.11,
+  "away_goals_avg": 1.63
+}
+```
+
+**Campos:**
+- `shot_efficiency`: gols marcados por chute no alvo (Arsenal = 36.9%)
+- `avg_xg`: xG médio por jogo baseado nos dados históricos
+- `goals_by_half.first_half_pct`: proporção de gols marcados no 1T (Arsenal = 43.4% no 1T)
+- `home_win_rate` vs `away_win_rate`: contraste entre desempenho em casa e fora
+
+**Quando usar:** Para análises de tendência ofensiva, apostas em Over/Under por half, e enriquecer contexto do LLM.
+
+---
+
 ## Polling — Como Atualizar o Frontend
 
 | Dado | Endpoint | Intervalo recomendado |
@@ -560,6 +651,8 @@ curl "$BASE/analytics/risk-scores?minute=75&score_diff=-1"
 | Momentum | `GET /matches/{id}/stats-trend` | 2 min |
 | Próximos jogos | `GET /matches/upcoming` | 5 min |
 | Risk scores | `GET /analytics/risk-scores` | Calculado localmente com o minuto atual |
+| Perfil do árbitro | `GET /analytics/referees/{name}/stats` | Uma vez antes do jogo |
+| Perfil do time | `GET /analytics/teams/{name}/profile` | Uma vez por sessão |
 | Narrativa completa | `GET /predictions/{id}/full-analysis` | Sob demanda (botão) |
 
 > **Dica:** O `full-analysis` não deve ser chamado no polling — é caro (LLM). Acione sob demanda ou uma vez por jogo.
@@ -650,3 +743,8 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `form_string` | string | Sequência de resultados ex: `"WWDLW"` |
 | `agent_steps` | string[] | Nós do grafo LangGraph executados |
 | `session_id` | string (UUID) | ID de sessão para histórico de chat — gerado pelo frontend |
+| `shot_efficiency` | float 0–1 | Gols por chute no alvo do time |
+| `avg_xg` | float | xG médio por jogo do time |
+| `first_half_pct` | float 0–1 | Proporção de gols marcados no 1º tempo |
+| `avg_yellow_cards` | float | Média de cartões amarelos/jogo do árbitro |
+| `home_win_rate` (árbitro) | float 0–1 | Taxa de vitória do mandante com este árbitro |

@@ -117,6 +117,23 @@ async def get_team_profile(team_name: str):
     return profile
 
 
+@router.get("/model/calibration", summary="Calibração e backtesting do modelo")
+async def get_model_calibration(
+    n: int = Query(default=500, ge=50, le=4000, description="Número de jogos recentes para backtest"),
+):
+    """
+    **Backtesting do modelo Poisson** nos últimos N jogos encerrados.
+
+    Retorna para cada mercado (home_win, draw, away_win, over_2.5, btts):
+    - **Brier Score** — erro quadrático médio (menor = melhor, 0 = perfeito)
+    - **Calibration bins** — comparação entre probabilidade prevista e frequência real
+    - Se avg_predicted ≈ avg_actual em cada bin, o modelo está bem calibrado
+
+    Tempo: ~10s para 500 jogos (cacheado após primeira chamada).
+    """
+    return await asyncio.to_thread(analytics.get_model_calibration, n)
+
+
 @router.get("/risk-scores", summary="Scores de risco ao vivo")
 async def get_risk_scores(
     minute: int = Query(..., ge=0, le=120, description="Minuto atual da partida"),

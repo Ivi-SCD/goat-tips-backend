@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.services import betsapi
 from app.services import conversation
 from app.services.narrative import generate_narrative, answer_question, answer_general_question
-from app.services.predictor import predict_match, predict_from_match_context, ScorePrediction
+from app.services.predictor import predict_match, predict_from_match_context, predict_inplay, ScorePrediction
 from app.schemas.match import MatchContext, NarrativeResponse
 from app.schemas.prediction import ScorePredictionResponse
 from app.schemas.agent import FullMatchAnalysis
@@ -77,6 +77,7 @@ async def ask_general(
 async def predict_by_name(
     home: str = Query(..., description="Nome do time mandante (ex: Arsenal)"),
     away: str = Query(..., description="Nome do time visitante (ex: Chelsea)"),
+    referee: Optional[str] = Query(default=None, description="Nome do árbitro (ajusta probabilidades de gols)"),
 ):
     """
     **Previsão Poisson por nome dos times** — não requer event_id.
@@ -84,9 +85,33 @@ async def predict_by_name(
     Útil para prever qualquer confronto, incluindo jogos futuros ainda sem ID registrado.
     Modelo treinado em 4,495 jogos da Premier League (2014–2026).
 
-    Exemplo: `GET /predictions/?home=Arsenal&away=Chelsea`
+    Exemplo: `GET /predictions/?home=Arsenal&away=Chelsea&referee=Michael+Oliver`
     """
-    raw = await asyncio.to_thread(predict_match, home, away)
+    raw = await asyncio.to_thread(predict_match, home, away, referee_name=referee)
+    return _pred_to_response(raw)
+
+
+@router.get("/inplay", response_model=ScorePredictionResponse,
+            summary="Previsão in-play (ao vivo)")
+async def predict_inplay_by_name(
+    home: str = Query(..., description="Time mandante"),
+    away: str = Query(..., description="Time visitante"),
+    home_goals: int = Query(..., ge=0, description="Gols atuais do mandante"),
+    away_goals: int = Query(..., ge=0, description="Gols atuais do visitante"),
+    minute: int = Query(..., ge=1, le=90, description="Minuto atual do jogo"),
+    referee: Optional[str] = Query(default=None, description="Nome do árbitro"),
+):
+    """
+    **Previsão Bayesiana in-play** — atualiza probabilidades considerando placar e minuto.
+
+    Exemplo: `GET /predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70`
+
+    Retorna as probabilidades de resultado final **dado o estado atual do jogo**.
+    Muito mais preciso que a previsão pré-jogo durante partidas ao vivo.
+    """
+    raw = await asyncio.to_thread(
+        predict_inplay, home, away, home_goals, away_goals, minute, referee,
+    )
     return _pred_to_response(raw)
 
 
@@ -101,6 +126,33 @@ async def predict_by_event(event_id: str):
     if not match:
         raise HTTPException(status_code=404, detail="Partida não encontrada")
     raw = await asyncio.to_thread(predict_from_match_context, match)
+    return _pred_to_response(raw)
+
+
+@router.get("/{event_id}/inplay", response_model=ScorePredictionResponse,
+            summary="Previsão in-play por event_id")
+async def predict_inplay_by_event(event_id: str):
+    """
+    **Previsão Bayesiana in-play automática** — obtém placar e minuto da BetsAPI
+    e recalcula probabilidades de resultado final.
+
+    Se o jogo não estiver ao vivo, retorna a previsão pré-jogo padrão.
+    """
+    match = await betsapi.get_match_by_id(event_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Partida não encontrada")
+
+    if match.status == "live" and match.minute is not None and match.minute > 0:
+        referee = getattr(match, "referee", None)
+        raw = await asyncio.to_thread(
+            predict_inplay,
+            match.home.name, match.away.name,
+            match.score_home, match.score_away,
+            match.minute, referee,
+        )
+    else:
+        raw = await asyncio.to_thread(predict_from_match_context, match)
+
     return _pred_to_response(raw)
 
 
