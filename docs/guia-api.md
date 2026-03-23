@@ -498,19 +498,64 @@ curl -X DELETE "$BASE/predictions/12345678/ask/history?session_id=550e8400-e29b-
 
 ---
 
-### `POST /predictions/ask` (sem event_id)
+### `POST /predictions/ask` e `POST /predictions/{event_id}/ask`
 
-Perguntas gerais sobre a Premier League — sem precisar de uma partida específica.
+Pergunta livre sobre a Premier League ou uma partida específica. Ambos usam o mesmo **pipeline multi-agente de 6 agentes LangGraph** (v0.6.0).
 
 ```bash
+# Pergunta geral
 curl -X POST $BASE/predictions/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Qual árbitro aplica mais cartões amarelos esta temporada?"}'
+
+# Pergunta sobre partida específica
+curl -X POST "$BASE/predictions/12345678/ask?session_id=meu-uuid" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Qual é a forma recente do Arsenal e qual a chance de placar 2-0?"}'
 ```
 
-**Como funciona:** O LLM usa as mesmas 7 ferramentas do endpoint com `event_id`, mas sem contexto de partida específica. Ideal para chatbots de pré-jogo, consultas sobre a liga em geral, ou quando o usuário ainda não selecionou uma partida.
+**Pipeline de 6 agentes (substituiu loop de ferramentas em v0.6.0):**
 
-**Suporta `?session_id=` igual ao endpoint com `event_id`.**
+```
+intent_router (classifica intenção: FORM_ODDS | INJURIES | PLAYER | HISTORICAL | PREDICTION | ...)
+    ↓
+parallel_gather (3 sub-agentes em paralelo, timeout 1.8s cada):
+    ├── live_context    → BetsAPI: ao vivo, upcoming, odds
+    ├── historical_stats → CSV/Supabase: form, H2H, stats
+    └── player_intel    → Supabase FBref snapshots: attack_index, ausências
+    ↓
+quant_agent → Poisson: λ, probabilidades, placar mais provável
+    ↓
+narrative_verifier → LLM (Groq): sintetiza em Português com confidence_label
+```
+
+**Resiliência:** se qualquer sub-agente falhar (timeout 1.8s), `partial_context=True` na resposta — o restante dos dados ainda é entregue.
+
+**Resposta (campos novos em v0.6.0):**
+```json
+{
+  "match_id": "12345678",
+  "headline": "Arsenal favorito com força ofensiva superior",
+  "analysis": "...",
+  "prediction": "Placar mais provável: 2-0 Arsenal...",
+  "momentum_signal": "Arsenal pressiona",
+  "confidence_label": "Alta",
+  "confidence_score": 0.87,
+  "data_sources": ["live_context", "historical_stats", "player_intel", "quant"],
+  "partial_context": false,
+  "agent_trace_id": "a3f2e1d0-..."
+}
+```
+
+**Campos de observabilidade:**
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `confidence_score` | float 0–1 | Confiança agregada dos artefatos dos agentes |
+| `data_sources` | list[string] | Quais agentes contribuíram com dados |
+| `partial_context` | bool | `true` se algum agente falhou/timeout |
+| `agent_trace_id` | UUID string | ID para correlação em logs |
+
+**Suporta `?session_id=` em ambos os endpoints para histórico de conversa.**
 
 ---
 
@@ -979,3 +1024,12 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `weather_factor` | float 0.75–1.0 | Multiplicador climático em λ (1.0 = neutro, 0.85 = trovoada) |
 | `weather_condition` | string | Label climático: "clear", "cloudy", "drizzle", "rain", "snow", "storm" |
 | `half_time` | object | Previsão para o intervalo: `home_win_prob`, `draw_prob`, `away_win_prob`, `over_0_5_prob`, `over_1_5_prob`, `most_likely_score`, `lambda_home`, `lambda_away` |
+| `confidence_score` | float 0–1 | Confiança agregada do pipeline multi-agente |
+| `data_sources` | list[string] | Agentes que contribuíram: `live_context`, `historical_stats`, `player_intel`, `quant` |
+| `partial_context` | bool | `true` se algum agente do pipeline falhou ou sofreu timeout |
+| `agent_trace_id` | UUID | ID único para correlação em logs do pipeline ask |
+| `attack_index` | float | FBref: `(Gls+xG)` ponderado por 90s jogados — poder ofensivo do elenco |
+| `creation_index` | float | FBref: `(Ast+xAG+KP+PrgP)` ponderado — criatividade e progressão |
+| `defensive_index` | float | FBref: `(Tkl+Int+Blocks+Clr)` ponderado — solidez defensiva |
+| `squad_depth` | int | Número de jogadores com ≥5 90s jogados no elenco |
+| `impact_score` | float 0–10 | Score de impacto de ausência de jogador: `(Gls + Ast + 90s×0.1) / max_do_time × 10` |

@@ -25,8 +25,8 @@ from typing import Any, Optional, TypedDict
 
 logger = logging.getLogger(__name__)
 
-# Per-agent timeout (seconds)
-AGENT_TIMEOUT = 1.8
+# Per-agent timeout (seconds) — set to None to disable
+AGENT_TIMEOUT = None
 
 # Confidence weight by level
 _CONFIDENCE_WEIGHTS = {"high": 1.0, "medium": 0.6, "low": 0.3}
@@ -96,10 +96,12 @@ def _empty_artifact(source: str, error: str) -> AgentArtifact:
     )
 
 
-async def _with_timeout(coro, *, timeout: float = AGENT_TIMEOUT, label: str) -> AgentArtifact:
-    """Run `coro` with a hard timeout; return a low-confidence artifact on failure."""
+async def _with_timeout(coro, *, timeout=AGENT_TIMEOUT, label: str) -> AgentArtifact:
+    """Run `coro`, returning a low-confidence artifact on failure. Timeout disabled."""
     try:
-        return await asyncio.wait_for(coro, timeout=timeout)
+        if timeout is not None:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        return await coro
     except asyncio.TimeoutError:
         logger.warning("Agent '%s' timed out after %.1fs", label, timeout)
         return _empty_artifact(label, f"timeout after {timeout}s")
@@ -164,7 +166,7 @@ async def live_context_node(state: AskState) -> AgentArtifact:
 
     # For non-odds/non-prediction intents, a lightweight fetch is fine
     try:
-        odds_text = await asyncio.wait_for(_upcoming_odds_async(None), timeout=AGENT_TIMEOUT)
+        odds_text = await _upcoming_odds_async(None)
         confidence = "high" if odds_text and "Premier League" in odds_text else "medium"
         return AgentArtifact(
             source="live_context",
@@ -518,9 +520,9 @@ async def parallel_gather_node(state: AskState) -> dict[str, Any]:
     Each has a hard timeout of AGENT_TIMEOUT seconds.
     """
     live_art, hist_art, player_art = await asyncio.gather(
-        _with_timeout(live_context_node(state),     timeout=AGENT_TIMEOUT, label="live_context"),
-        _with_timeout(historical_stats_node(state), timeout=AGENT_TIMEOUT, label="historical_stats"),
-        _with_timeout(player_intel_node(state),     timeout=AGENT_TIMEOUT, label="player_intel"),
+        _with_timeout(live_context_node(state),     label="live_context"),
+        _with_timeout(historical_stats_node(state), label="historical_stats"),
+        _with_timeout(player_intel_node(state),     label="player_intel"),
     )
 
     return {"artifacts": [live_art, hist_art, player_art]}

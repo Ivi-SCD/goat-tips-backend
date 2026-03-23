@@ -101,6 +101,9 @@ O Supabase (PostgreSQL) armazena os dados históricos, os novos jogos sincroniza
 | `odds_snapshots` | 20,092 | Odds de fechamento por partida e mercado |
 | `sync_log` | — | Histórico de execuções do CE Job diário |
 | `conversation_sessions` | — | Histórico de chat por `(session_id, event_id)` — JSONB |
+| `team_player_strength_snapshot` | 35 | FBref: attack/creation/defensive index por time e temporada |
+| `team_style_snapshot_statsbomb` | 35 | StatsBomb: avg_goals, clean_sheet_rate, btts_rate por time |
+| `player_absence_impact` | ~350 | Top-10 jogadores por time com impact_score (0–10) |
 
 **Views úteis:**
 - `v_matches` — join completo com nomes dos times
@@ -293,10 +296,28 @@ O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine 
 2. query xG → match_stats WHERE metric='xg' (1,291 registros)
 3. Treina forças home/away split por time
 4. xG blend para times com ≥10 jogos com xG (25 times)
-5. Serializa com joblib compress=3 → poisson_model.pkl
-6. ibm_boto3 → upload para IBM COS (goat-tips-bucket)
-7. Na próxima requisição, predictor.py baixa o novo pkl via IBM COS
+5. [NOVO v2.1] Carrega data/kaggle/players_data_2025_2026.csv (FBref)
+   → computa por time: attack_index, creation_index, defensive_index, squad_depth
+   → enriquece team_strengths no pkl
+6. [NOVO v2.1] Upsert 3 snapshot tables no Supabase:
+   → team_player_strength_snapshot (attack/creation/defensive index por temporada)
+   → team_style_snapshot_statsbomb (avg_goals, clean_sheet_rate, btts_rate)
+   → player_absence_impact (top-10 jogadores por time com impact_score 0–10)
+7. Serializa com joblib compress=3 → poisson_model.pkl
+8. ibm_boto3 → upload para IBM COS (goat-tips-bucket)
+9. Na próxima requisição, predictor.py baixa o novo pkl via IBM COS
+   Na próxima pergunta ao /ask, player_intel agent consulta os snapshots
 ```
+
+**Kaggle/FBref player indices** — o que cada índice mede:
+| Índice | Métricas FBref | O que representa |
+|--------|---------------|-----------------|
+| `attack_index` | `(Gls + xG)` ponderado por 90s | Poder ofensivo do elenco |
+| `creation_index` | `(Ast + xAG + KP + PrgP)` ponderado | Criatividade e progressão |
+| `defensive_index` | `(Tkl+Int + Blocks + Clr)` ponderado | Solidez defensiva coletiva |
+| `squad_depth` | nº de jogadores com ≥5 90s | Profundidade de banco |
+
+**Novo env var requerido:** `KAGGLE_PLAYERS_CSV=data/kaggle/players_data_2025_2026.csv`
 
 ### Fallback em cadeia do predictor
 
@@ -356,13 +377,66 @@ O LangGraph suporta fan-out nativo mas adiciona overhead de serialização de es
 
 ---
 
-## Ferramentas LLM (Tool-Calling)
+## Agente Ask — Supervisor Multi-Agente
 
-O endpoint `/ask` usa um loop agentico com até **5 rodadas** de chamadas a ferramentas (aumentado de 3 para perguntas complexas com múltiplas fontes). O LLM decide automaticamente quais ferramentas usar baseado na pergunta do usuário.
+Os endpoints `/predictions/ask` e `/predictions/{id}/ask` usam um **pipeline LangGraph de 6 agentes** (substituiu o loop de ferramentas em v0.6.0). Cada agente tem foco único, timeout de 1.8s e retorna um `AgentArtifact` com `confidence`, `payload` e `citations`.
 
-### Ferramentas disponíveis (7)
+```
+intent_router
+    │
+    ▼
+parallel_gather ─────────────────────────────────────────────────
+  asyncio.gather (3 sub-agentes em paralelo, timeout 1.8s cada):
+    ├── live_context     → BetsAPI: ao vivo, upcoming, odds
+    ├── historical_stats → Supabase/CSV: form, H2H, stats
+    └── player_intel     → Supabase snapshots (FBref): attack_index,
+                           creation_index, player_absence_impact
+    │
+    ▼
+quant_agent ─────────────────────────────────────────────────────
+  → Modelo Poisson: λ_home, λ_away, probabilidades, placar
+    │
+    ▼
+narrative_verifier ──────────────────────────────────────────────
+  Groq LLM: sintetiza todos os artifacts em Português
+  → headline + analysis + prediction + momentum_signal + confidence_label
+    │
+    ▼
+END
+```
 
-| Ferramenta | Fonte | Quando o LLM usa |
+**SLAs de resiliência:**
+- Per-agent timeout: **1.8s** — agente falho retorna artifact vazio com `confidence="low"`
+- Total graph budget: **6.5s** (asyncio.wait_for)
+- Degraded mode: `partial_context=True` quando qualquer agente falha/timeout — resposta ainda é entregue com fontes disponíveis
+
+**Roteamento por intenção (IntentRouterAgent):**
+
+| Intent | Gatilho | Sub-agentes priorizados |
+|--------|---------|------------------------|
+| `FORM_ODDS` | "forma recente", "odds", "mercado" | live_context + historical_stats |
+| `INJURIES` | "lesão", "desfalque", "suspenso" | player_intel + live_context |
+| `HISTORICAL` | "H2H", "histórico", "confronto" | historical_stats |
+| `PLAYER` | "jogador", "artilheiro", stats individuais | player_intel |
+| `TACTICAL` | "tática", "formação", "estilo" | historical_stats + player_intel |
+| `PREDICTION` | "prever", "placar", "probabilidade" | quant_agent |
+| `GENERAL` | qualquer outra coisa | todos |
+
+**Observabilidade no response** — todos os campos opcionais, backward-compatible:
+```json
+{
+  "confidence_score": 0.87,
+  "data_sources": ["live_context", "historical_stats", "player_intel", "quant"],
+  "partial_context": false,
+  "agent_trace_id": "a3f2e1..."
+}
+```
+
+### Ferramentas disponíveis (8)
+
+O `quant_agent` e o `narrative_verifier` também têm acesso às ferramentas abaixo para chamadas ad-hoc:
+
+| Ferramenta | Fonte | Quando usa |
 |---|---|---|
 | `web_search` | Vertex AI Search (Google Cloud) | Árbitros, lesões, notícias, previews |
 | `get_team_form` | Dataset histórico CSV | Forma recente de um time |
@@ -371,16 +445,7 @@ O endpoint `/ask` usa um loop agentico com até **5 rodadas** de chamadas a ferr
 | `get_upcoming_odds` | BetsAPI tempo real | Próximos jogos + odds |
 | `get_team_profile` | Stats + Timeline CSV | Shot efficiency, xG, gols por half |
 | `get_referee_stats` | Events + Stats CSV | Média de cartões e faltas por árbitro |
-
-### Loop agentico
-
-```
-Pergunta do usuário
-    ↓
-LLM → tool_calls?
-    ├── SIM → executar ferramentas em paralelo → appender resultados → loop (max 3x)
-    └── NÃO → gerar resposta final em Português
-```
+| `get_player_intel` | Supabase snapshots (FBref) | `attack_index`, `creation_index`, `squad_depth`, ausências |
 
 O sistema de aliases (`_normalize()`) mapeia automaticamente nomes como "Manchester City" → "Man City", "Nottingham Forest" → "Nottm Forest", garantindo consultas corretas ao dataset.
 
@@ -558,8 +623,10 @@ python scripts/train_model.py
 edscript/
 ├── app/
 │   ├── agents/
-│   │   ├── match_agent.py   # Graph LangGraph + run_full_analysis()
-│   │   └── nodes.py         # AgentState TypedDict + 3 nós
+│   │   ├── match_agent.py   # Graph LangGraph 3-nós + run_full_analysis()
+│   │   ├── nodes.py         # AgentState TypedDict + 3 nós (full-analysis)
+│   │   ├── ask_agent.py     # Supervisor 6-agentes LangGraph (ask pipeline)
+│   │   └── ask_nodes.py     # AskState, 6 node funcs, AgentArtifact contract
 │   ├── core/settings.py     # Pydantic Settings — todas as env vars
 │   ├── db/
 │   │   ├── connection.py    # Pool asyncpg
@@ -595,7 +662,11 @@ edscript/
 │   └── test_routes.py       # Testa todos os endpoints com rich output
 ├── sql/
 │   ├── schema.sql                   # Schema Supabase completo (6 tabelas + views)
-│   └── conversation_sessions.sql    # Tabela de histórico de chat
+│   ├── conversation_sessions.sql    # Tabela de histórico de chat
+│   └── feature_snapshots.sql        # 3 tabelas de snapshots FBref/StatsBomb
+├── data/kaggle/                     # FBref + StatsBomb CSVs (não versionados)
+│   ├── players_data_2025_2026.csv   # Stats por jogador (Kaggle/FBref export)
+│   └── statsbomb_premier_league_matches.csv # Partidas StatsBomb
 ├── docs/guia-api.md         # Guia de consumo da API em Português
 ├── Dockerfile               # Imagem da API principal
 ├── .dockerignore            # Exclui odds timeseries (563 MB)
