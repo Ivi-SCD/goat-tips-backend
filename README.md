@@ -26,7 +26,9 @@ FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
           │   ├── analytics.py      # Business logic histórico
           │   ├── narrative.py      # Geração de narrativa LLM
           │   ├── llm_client.py     # Groq client singleton (openai SDK)
-          │   └── conversation.py   # Histórico de sessão no Supabase (JSONB)
+          │   ├── conversation.py   # Histórico de sessão no Supabase (JSONB)
+          │   ├── search.py         # Vertex AI Search (Google Discovery Engine)
+          │   └── tools.py          # 7 ferramentas LLM + dispatcher async
           ├── app/repositories/
           │   ├── historical.py     # CSVs → pandas in-memory (lru_cache)
           │   └── database.py       # Supabase async (asyncpg)
@@ -130,10 +132,11 @@ P(placar = i-j) = Poisson(λ_home, i) × Poisson(λ_away, j)
 3. Geramos uma matriz 7×7 de probabilidades de placar (0–6 gols por time)
 4. Da matriz extraímos: placar mais provável, top 5 placares, Over 2.5, BTTS, vitória/empate/derrota
 
-**Limitações conhecidas:**
-- Não aplica correção de baixo placar de Dixon-Coles (simplificação consciente)
-- Não pondera jogos recentes com mais peso (todos os jogos valem igual)
-- Não modela desfalques ou lesões
+**Melhorias implementadas (v0.4.0):**
+- **P1 — Correção Dixon-Coles (ρ=0.04)** para placares baixos (0-0, 1-0, 0-1, 1-1): corrige subestimação de ~35% dos resultados da PL
+- **P2 — Time-decay** (half-life 1 ano): jogos recentes têm mais peso exponencialmente
+- **P3 — Ataque/defesa separados por mando**: `attack_home`, `attack_away`, `defense_home`, `defense_away` por time
+- **P6 — Matriz normalizada**: `mat /= mat.sum()` após correção ρ
 
 ### Ciclo de retreinamento
 
@@ -148,7 +151,7 @@ O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine 
 ```
 1. Carrega models/poisson_model.pkl local (mais rápido)
 2. Tenta download do IBM COS (quando não tem pkl local)
-3. Treina inline a partir do CSV (último recurso)
+3. Treina inline a partir do CSV com time-decay e split home/away (último recurso)
 ```
 
 ---
@@ -184,6 +187,36 @@ O LangGraph suporta fan-out nativo mas adiciona overhead de serialização de es
 
 ---
 
+## Ferramentas LLM (Tool-Calling)
+
+O endpoint `/ask` usa um loop agentico com até **3 rodadas** de chamadas a ferramentas. O LLM decide automaticamente quais ferramentas usar baseado na pergunta do usuário.
+
+### Ferramentas disponíveis (7)
+
+| Ferramenta | Fonte | Quando o LLM usa |
+|---|---|---|
+| `web_search` | Vertex AI Search (Google Cloud) | Árbitros, lesões, notícias, previews |
+| `get_team_form` | Dataset histórico CSV | Forma recente de um time |
+| `get_team_stats` | Dataset histórico CSV | Win rate, clean sheets, BTTS |
+| `get_h2h_stats` | Dataset histórico CSV | Histórico de confrontos diretos |
+| `get_upcoming_odds` | BetsAPI tempo real | Próximos jogos + odds |
+| `get_team_profile` | Stats + Timeline CSV | Shot efficiency, xG, gols por half |
+| `get_referee_stats` | Events + Stats CSV | Média de cartões e faltas por árbitro |
+
+### Loop agentico
+
+```
+Pergunta do usuário
+    ↓
+LLM → tool_calls?
+    ├── SIM → executar ferramentas em paralelo → appender resultados → loop (max 3x)
+    └── NÃO → gerar resposta final em Português
+```
+
+O sistema de aliases (`_normalize()`) mapeia automaticamente nomes como "Manchester City" → "Man City", "Nottingham Forest" → "Nottm Forest", garantindo consultas corretas ao dataset.
+
+---
+
 ## Histórico de Conversa
 
 O endpoint `/predictions/{id}/ask` suporta histórico de conversa por sessão, armazenado no Supabase.
@@ -196,6 +229,17 @@ O endpoint `/predictions/{id}/ask` suporta histórico de conversa por sessão, a
 
 **Por que 6 pares?**
 Típico de uma sessão de análise de partida (< 10 perguntas). A janela deslizante descarta pares mais antigos silenciosamente — sem sumarização necessária para esse volume.
+
+---
+
+## Diagramas de Arquitetura
+
+Os diagramas estão em `docs/` e podem ser abertos no [draw.io](https://app.diagrams.net/):
+
+| Arquivo | Conteúdo |
+|---|---|
+| `docs/architecture-general.drawio` | Visão geral: IBM Cloud, BetsAPI, Groq, Vertex AI Search, Supabase |
+| `docs/architecture-ml-agents.drawio` | Fluxo detalhado: Poisson+DC, LangGraph, Tool-Calling Loop, Retrain |
 
 ---
 
@@ -327,6 +371,9 @@ python scripts/train_model.py
 | GET | `/analytics/goal-patterns` | Distribuição de gols por minuto |
 | GET | `/analytics/card-patterns` | Distribuição de cartões por minuto |
 | GET | `/analytics/risk-scores` | Risk scores ao vivo (gol + cartão) |
+| GET | `/analytics/referees` | Lista todos os árbitros do dataset |
+| GET | `/analytics/referees/{name}/stats` | Estatísticas do árbitro: cartões/jogo, faltas, home win rate |
+| GET | `/analytics/teams/{name}/profile` | Perfil avançado: shot efficiency, xG, gols por half, home vs away |
 
 ---
 
@@ -353,7 +400,9 @@ edscript/
 │       ├── narrative.py     # Contexto enriquecido + chamada LLM
 │       ├── predictor.py     # Poisson + fallback IBM COS + fallback inline
 │       ├── analytics.py     # Lógica analytics histórico
-│       └── conversation.py  # Histórico de chat por sessão (Supabase JSONB)
+│       ├── conversation.py  # Histórico de chat por sessão (Supabase JSONB)
+│       ├── search.py        # Vertex AI Search (Google Discovery Engine)
+│       └── tools.py         # 7 ferramentas LLM + dispatcher async
 ├── jobs/
 │   └── daily_sync/          # CE Job — sync diário BetsAPI → Supabase
 │       ├── daily_sync.py    # Entrypoint IBM Code Engine

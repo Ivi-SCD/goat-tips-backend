@@ -50,3 +50,10 @@ reports/
 # ── Models — keep pkl and card, exclude large binaries if added later ─────────
 # models/*.pkl is committed (small, 1-2 KB serialized with joblib compress=3)
 # If the model grows >10 MB, add: models/*.pkl
+
+azure_functions
+config
+retrain
+scripts
+azure_functions.zip
+jobs

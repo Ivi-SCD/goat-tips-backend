@@ -15,6 +15,7 @@ COPY app/ ./app/
 COPY models/ ./models/
 COPY data/ ./data/
 COPY config/ ./config/
+COPY retrain.py ./retrain.py
 
 EXPOSE 8000
 
