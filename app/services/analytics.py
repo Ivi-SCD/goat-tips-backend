@@ -12,11 +12,13 @@ import logging
 from functools import lru_cache
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from app.repositories.historical import (
     get_all_teams, get_team_events, get_h2h_events,
     get_timeline_goals, get_timeline_cards, count_ended_matches,
+    load_events,
 )
 from app.schemas.analytics import (
     TeamForm, MatchResult, H2HRecord, H2HMatch,
@@ -421,3 +423,60 @@ def get_team_historical_stats(team_name: str) -> dict:
         "btts_matches": btts,
         "btts_rate": round(btts / total, 3) if total else 0.0,
     }
+
+
+@lru_cache(maxsize=1)
+def get_model_calibration(n_matches: int = 500) -> dict:
+    """Run backtesting on the last N matches and return calibration metrics."""
+    from app.services.predictor import predict_match, get_model
+    get_model()  # ensure loaded
+
+    events = load_events()
+    ended = events[events["time_status"] == 3].copy()
+    ended["home_score"] = pd.to_numeric(ended["home_score"], errors="coerce")
+    ended["away_score"] = pd.to_numeric(ended["away_score"], errors="coerce")
+    ended = ended.dropna(subset=["home_score", "away_score"])
+    ended = ended.sort_values("time_unix", ascending=False).head(n_matches)
+
+    bins = np.arange(0, 1.05, 0.1)
+    markets = {
+        "home_win": [], "draw": [], "away_win": [],
+        "over_2_5": [], "btts": [],
+    }
+
+    for _, row in ended.iterrows():
+        pred = predict_match(str(row["home_team_name"]), str(row["away_team_name"]))
+        hs, aw = int(row["home_score"]), int(row["away_score"])
+        markets["home_win"].append((pred.home_win_prob, 1 if hs > aw else 0))
+        markets["draw"].append((pred.draw_prob, 1 if hs == aw else 0))
+        markets["away_win"].append((pred.away_win_prob, 1 if hs < aw else 0))
+        markets["over_2_5"].append((pred.over_2_5_prob, 1 if (hs + aw) > 2 else 0))
+        markets["btts"].append((pred.btts_prob, 1 if (hs > 0 and aw > 0) else 0))
+
+    result = {"sample_size": len(ended), "markets": {}}
+
+    for market, preds_actuals in markets.items():
+        preds = np.array([p for p, a in preds_actuals])
+        actuals = np.array([a for p, a in preds_actuals])
+        brier = float(np.mean((preds - actuals) ** 2))
+
+        cal_bins = []
+        bin_idxs = np.digitize(preds, bins) - 1
+        for i in range(len(bins) - 1):
+            mask = bin_idxs == i
+            if mask.sum() >= 5:
+                cal_bins.append({
+                    "range": f"{bins[i]:.1f}-{bins[i+1]:.1f}",
+                    "count": int(mask.sum()),
+                    "avg_predicted": round(float(preds[mask].mean()), 3),
+                    "avg_actual": round(float(actuals[mask].mean()), 3),
+                })
+
+        result["markets"][market] = {
+            "brier_score": round(brier, 4),
+            "avg_predicted": round(float(preds.mean()), 3),
+            "avg_actual": round(float(actuals.mean()), 3),
+            "calibration_bins": cal_bins,
+        }
+
+    return result
