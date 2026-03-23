@@ -237,15 +237,30 @@ curl $BASE/matches/toplist
 
 Previsão estatística por nome dos times. **Não requer partida ao vivo.**
 
-Aceita `?referee=` para ajuste de árbitro (±8% nos λ baseado em histórico do árbitro):
+Aceita `?referee=` para ajuste de árbitro e `?stadium=`/`?city=` para ajuste climático via Open-Meteo:
 
 ```bash
 # Previsão básica
 curl "$BASE/predictions/?home=Arsenal&away=Chelsea"
 
-# Com ajuste de árbitro
-curl "$BASE/predictions/?home=Arsenal&away=Chelsea&referee=Michael+Oliver"
+# Com árbitro + clima (kick-off às 15h UTC no Emirates)
+curl "$BASE/predictions/?home=Arsenal&away=Chelsea&referee=Michael+Oliver&stadium=Emirates+Stadium&match_hour_utc=15"
 ```
+
+**Query params:**
+| Param | Tipo | Descrição |
+|---|---|---|
+| `home` | string | Time mandante |
+| `away` | string | Time visitante |
+| `referee` | string | Árbitro (opcional) — ajuste ±8% em λ |
+| `stadium` | string | Nome do estádio (opcional) — ajuste climático via Open-Meteo |
+| `city` | string | Cidade (fallback quando estádio não encontrado) |
+| `match_hour_utc` | int 0–23 | Hora do kick-off em UTC para previsão climática horária |
+
+**Campos adicionais na resposta:**
+- `weather_factor` (float): multiplicador aplicado em λ (1.0 = sem impacto, 0.88 = chuva forte)
+- `weather_condition` (string): label climático ("clear", "rain", "storm", etc.)
+- `half_time` (object): previsão para o intervalo — ver seção abaixo
 
 **Resposta:**
 ```json
@@ -307,27 +322,34 @@ curl "$BASE/predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals
 | `away_goals` | int (≥0) | Sim | Gols atuais do visitante |
 | `minute` | int (1–90) | Sim | Minuto atual do jogo |
 | `referee` | string | Não | Nome do árbitro para ajuste de λ |
+| `home_red` | int (0–2) | Não | Cartões vermelhos do mandante (reduz λ_ataque × 0.72^N) |
+| `away_red` | int (0–2) | Não | Cartões vermelhos do visitante (idem) |
 
-**Retorna o mesmo schema do `GET /predictions/`**, mas com `lambda_home`/`lambda_away` representando os **gols esperados no tempo restante** (não no jogo inteiro).
+**Retorna o mesmo schema do `GET /predictions/`**, com `lambda_home`/`lambda_away` = **gols esperados no tempo restante**.
 
-**Como funciona:**
-1. Calcula λ pré-jogo normalmente (com xG e árbitro)
-2. Escala por tempo restante: `λ_rem = λ_full × (90 - minute) / 90`
-3. Distribui gols **adicionais** com Poisson(λ_rem), deslocando pelo placar atual
-4. `model_note` inclui: `"In-play Bayesian — 70' (1-0). λ restante: home=0.52, away=0.39"`
+**Como funciona (Non-Homogeneous Poisson):**
+1. Calcula λ pré-jogo (com xG, árbitro e clima)
+2. Usa **taxa empírica de gols por bucket de 15 min** (derivada de 9,448 gols PL) — não taxa constante
+3. Interpola linearmente dentro do bucket para sub-minuto preciso
+4. Aplica penalidade de cartão vermelho: `λ_ataque × 0.72^N` (time com N jogadores a menos)
+5. Distribui gols adicionais com Poisson(λ_rem), desloca pelo placar atual
+6. `model_note` detalha: minuto, placar, λ restante e fração de jogo usada
 
-**Exemplo de resposta (Arsenal 1-0 Chelsea, 70'):**
+**Exemplo de resposta (Arsenal 1-0 Chelsea, 70', Arsenal com 10 jogadores):**
+```bash
+curl "$BASE/predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70&home_red=1"
+```
 ```json
 {
   "home_team": "Arsenal",
   "away_team": "Chelsea",
-  "lambda_home": 0.521,
-  "lambda_away": 0.387,
-  "home_win_prob": 0.8490,
-  "draw_prob": 0.1340,
-  "away_win_prob": 0.0170,
+  "lambda_home": 0.375,
+  "lambda_away": 0.430,
+  "home_win_prob": 0.7147,
+  "draw_prob": 0.2022,
+  "away_win_prob": 0.0831,
   "most_likely_score": "1-0",
-  "model_note": "In-play Bayesian — 70' (1-0). λ restante: home=0.52, away=0.39. Base: 4495 jogos PL."
+  "model_note": "In-play (Non-Homogeneous Poisson) — 70' (1-0) 🟥Arsenal(x1). λ restante: home=0.38, away=0.43 (28.2% do jogo). Base: 4495 jogos PL."
 }
 ```
 
@@ -721,6 +743,65 @@ curl "$BASE/analytics/teams/Arsenal/profile"
 
 ---
 
+### `GET /analytics/weather`
+
+**Condições climáticas em tempo real ou previstas** para estádios da Premier League.
+
+```bash
+# Clima atual no Emirates
+curl "$BASE/analytics/weather?stadium=Emirates+Stadium"
+
+# Previsão para kick-off às 15h UTC
+curl "$BASE/analytics/weather?stadium=Anfield&match_hour_utc=15"
+
+# Por cidade (fallback)
+curl "$BASE/analytics/weather?city=London&match_hour_utc=20"
+```
+
+**Query params:**
+| Param | Tipo | Descrição |
+|---|---|---|
+| `stadium` | string | Nome do estádio (33 estádios PL com coordenadas) |
+| `city` | string | Cidade fallback (25 cidades com coordenadas) |
+| `match_hour_utc` | int 0–23 | Hora do kick-off em UTC para previsão horária |
+
+**Resposta:**
+```json
+{
+  "stadium": "Emirates Stadium",
+  "city": null,
+  "weather_code": 61,
+  "condition": "rain",
+  "description": "Chuva",
+  "precipitation_mm": 2.4,
+  "wind_speed_kmh": 18.2,
+  "temperature_c": 11.3,
+  "goal_factor": 0.920,
+  "source": "stadium",
+  "impact": "leve"
+}
+```
+
+**Campos:**
+- `goal_factor`: multiplicador para λ (integrado automaticamente em `/predictions/` se `?stadium=` for passado)
+- `impact`: "neutro" (≥0.99), "leve" (≥0.94), "moderado" (≥0.87), "severo" (<0.87)
+- `source`: "stadium" (coordenada exata) ou "city" (coordenada de cidade)
+
+**Tabela de impacto climático:**
+| Condição | `goal_factor` | Redução de gols |
+|----------|--------------|-----------------|
+| Céu limpo / Nublado | 1.00 | 0% |
+| Garoa | 0.96 | -4% |
+| Chuva leve | 0.92 | -8% |
+| Chuva forte | 0.88–0.92 | -8% a -13% |
+| Neve | 0.88 | -12% |
+| Trovoada | 0.85 | -15% |
+| Vento > 40 km/h | -0.05 adicional | |
+
+**Fonte:** Open-Meteo API (gratuita, sem chave). Latência: ~200–500 ms.
+
+---
+
 ### `GET /analytics/model/calibration?n=500`
 
 **Backtesting do modelo Poisson** — avalia a qualidade das probabilidades nos últimos N jogos encerrados.
@@ -782,7 +863,8 @@ curl "$BASE/analytics/model/calibration?n=500"
 | Risk scores | `GET /analytics/risk-scores` | Calculado localmente com o minuto atual |
 | Perfil do árbitro | `GET /analytics/referees/{name}/stats` | Uma vez antes do jogo |
 | Perfil do time | `GET /analytics/teams/{name}/profile` | Uma vez por sessão |
-| Probabilidades in-play | `GET /predictions/{id}/inplay` | 30 s (sincronizar com polling de placar) |
+| Probabilidades in-play | `GET /predictions/{id}/inplay` | 30 s (sincronizar com polling de placar; passar `?home_red=N` se houver cartão vermelho) |
+| Clima do estádio | `GET /analytics/weather?stadium=X` | Uma vez por dia (ou na abertura do card da partida) |
 | Narrativa completa | `GET /predictions/{id}/full-analysis` | Sob demanda (botão) |
 | Calibração do modelo | `GET /analytics/model/calibration` | Uma vez por semana / após retrain |
 
@@ -891,5 +973,9 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `referee` | string (query param) | Nome do árbitro para ajuste de λ (±8% baseado em 3,715 jogos) |
 | `home_goals` / `away_goals` | int | Gols atuais para previsão in-play |
 | `minute` | int 1–90 | Minuto atual do jogo para previsão in-play |
+| `home_red` / `away_red` | int 0–2 | Cartões vermelhos — reduz λ_ataque × 0.72^N por jogador a menos |
 | `brier_score` | float 0–0.25 | Erro quadrático médio (menor = melhor, <0.22 = modelo bom) |
 | `lambda_home` (in-play) | float | Gols esperados do mandante **no tempo restante** (não no jogo inteiro) |
+| `weather_factor` | float 0.75–1.0 | Multiplicador climático em λ (1.0 = neutro, 0.85 = trovoada) |
+| `weather_condition` | string | Label climático: "clear", "cloudy", "drizzle", "rain", "snow", "storm" |
+| `half_time` | object | Previsão para o intervalo: `home_win_prob`, `draw_prob`, `away_win_prob`, `over_0_5_prob`, `over_1_5_prob`, `most_likely_score`, `lambda_home`, `lambda_away` |

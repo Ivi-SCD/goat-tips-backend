@@ -141,9 +141,11 @@ P(placar = i-j) = Poisson(λ_home, i) × Poisson(λ_away, j)
 | P3 | **Ataque/defesa separados por mando** | `attack_home`, `attack_away`, `defense_home`, `defense_away` por time |
 | P4 | **xG blend (40%)** | 1,291 jogos com xG (2022–2026): `λ = 0.6 × goals_strength + 0.4 × xg_strength` |
 | P5 | **Referee goal factor** | Multiplica λ pelo desvio histórico do árbitro em relação à média da liga |
-| P6 | **In-play Bayesian** | Atualiza P(resultado) condicionado ao placar atual e ao minuto |
+| P6 | **In-play Non-Homogeneous Poisson** | Taxa de gol empírica por bucket de 15 min (9,448 gols) + suporte a cartão vermelho |
 | P7 | **Matriz normalizada** | `mat /= mat.sum()` após correção Dixon-Coles |
 | P8 | **Calibração com Brier Score** | Endpoint de backtesting com comparação predicted vs actual |
+| P9 | **Weather adjustment** | Open-Meteo API: chuva/neve/vento reduzem λ em 4–15% por jogo |
+| P10 | **Half-time prediction** | Previsão de intervalo embutida em toda resposta: HT win/draw/loss + Over 0.5/1.5 |
 
 ### Feature P4 — xG Blend (40%)
 
@@ -179,20 +181,33 @@ la *= ref_factor  # ajusta λ_away
 
 **Ativação:** passe `?referee=Michael+Oliver` no endpoint de previsão ou use o `event_id` de um jogo ao vivo (o árbitro é extraído automaticamente da BetsAPI).
 
-### Feature P6 — In-play Bayesian Update
+### Feature P6 — In-play Non-Homogeneous Poisson
 
 A previsão pré-jogo torna-se obsoleta após o primeiro gol. O modelo in-play recalcula:
 
 ```
-P(resultado final | placar atual, minuto)
+P(resultado final | placar atual, minuto, cartões vermelhos)
 ```
 
 **Algoritmo:**
-1. Computa λ_home e λ_away pré-jogo (igual ao predict_match, incluindo xG e árbitro)
-2. Escala os λ pela fração de tempo restante: `λ_rem = λ_full × (90 - minute) / 90`
-3. Calcula distribuição de gols **adicionais** com `Poisson(λ_rem)`
-4. Constrói a matriz de placar final deslocando pelo placar atual
-5. Normaliza e extrai home_win, draw, away_win
+1. Computa λ_home e λ_away pré-jogo (incluindo xG, árbitro e clima)
+2. Usa **taxa de gol empírica por bucket de 15 min** (não taxa constante) derivada de 9,448 gols:
+
+```python
+# Fração de gols por período — derivado de 229K timeline events
+_BUCKET_WEIGHTS = [
+    (1,  15, 0.1388),   # 13.9% dos gols
+    (16, 30, 0.1586),   # 15.9%
+    (31, 45, 0.1624),   # 16.2%
+    (46, 60, 0.1745),   # 17.5%
+    (61, 75, 0.1861),   # 18.6% — pico!
+    (76, 95, 0.1797),   # 18.0% (inclui acréscimos)
+]
+```
+
+3. Interpola linearmente dentro do bucket atual para precisão sub-minuto
+4. Aplica penalidade de cartão vermelho: equipe com 10 jogadores → `λ_ataque × 0.72^N`, adversário `× (1/0.90)^N`
+5. Constrói matriz de placar final deslocando pelo placar atual e normaliza
 
 **Exemplo — Arsenal 1-0 Chelsea, Michael Oliver:**
 
@@ -202,6 +217,56 @@ P(resultado final | placar atual, minuto)
 | 30' | 77.7% | 15.8% | 6.5% |
 | 70' | 84.9% | 13.4% | 1.7% |
 | 85' | 94.7% | 5.2% | 0.2% |
+
+**Com cartão vermelho do Arsenal no 70':** home_win cai de 84.9% → ~71% (λ_rem × 0.72)
+
+### Feature P9 — Weather Adjustment
+
+O clima afeta o ritmo de jogo: chuva pesada reduz passes curtos, vento forte altera trajetórias. Integramos a **Open-Meteo API** (gratuita, sem chave) para ajustar os λ em tempo real.
+
+```python
+# Multiplicadores de goal factor por condição climática:
+# clear/cloudy: 1.00 (sem impacto)
+# drizzle:      0.96  (-4%)
+# rain:         0.88–0.92 (-8% a -13%, proporcional à precipitação mm)
+# snow:         0.88  (-12%)
+# storm:        0.85  (-15%)
+# wind > 40km/h: -5% adicional
+# wind > 25km/h: -2% adicional
+# floor: 0.75  (máximo -25%)
+
+lh *= weather_factor  # aplicado após referee_factor
+la *= weather_factor
+```
+
+**Cobertura:** 33 estádios da PL com coordenadas precisas + 25 cidades como fallback. Suporta previsão horária para o kick-off exato (`?match_hour_utc=15`).
+
+**Ativação:** passe `?stadium=Emirates+Stadium` ou `?city=London` no endpoint de previsão. Também disponível isolado em `GET /analytics/weather`.
+
+### Feature P10 — Half-time Prediction
+
+Toda resposta de previsão agora inclui o objeto `half_time` com probabilidades para o **intervalo** (placar ao fim de 45 minutos):
+
+```python
+_FH_FRACTION = 0.4598  # 46% dos gols ocorrem no 1T (derivado de 9,448 gols)
+
+lh_fh = lh_full × 0.4598  # λ do 1T
+la_fh = la_full × 0.4598
+
+# Retorna:
+{
+  "home_win_prob": ...,    # mandante vencendo no intervalo
+  "draw_prob":     ...,    # empate no intervalo
+  "away_win_prob": ...,    # visitante vencendo no intervalo
+  "over_0_5_prob": ...,    # ao menos 1 gol no 1T
+  "over_1_5_prob": ...,    # ao menos 2 gols no 1T
+  "most_likely_score": "0-0",
+  "lambda_home": ...,      # gols esperados do mandante no 1T
+  "lambda_away": ...
+}
+```
+
+Útil para mercados de **resultado ao intervalo** e **gols no 1T** em plataformas de apostas.
 
 ### Feature P8 — Calibração e Backtesting
 
@@ -248,13 +313,19 @@ O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine 
 O endpoint `/predictions/{id}/full-analysis` é o coração do produto. Orquestra um grafo de 3 nós:
 
 ```
+START
+  │
+  ▼
 fetch_context ─────────────────────────────────────────────────
   asyncio.gather (paralelo):
     ├── get_match_by_id(event_id)    → placar, odds, árbitro, estádio
     ├── get_h2h(event_id)            → histórico de confrontos BetsAPI
     ├── get_stats_trend(event_id)    → momentum tático por período
     └── get_lineup(event_id)         → escalações confirmadas
-                    │
+  │
+  ├─[no_match]──────────────────────────────────────────► END
+  │
+  ▼ [ok]
 fetch_historical ───────────────────────────────────────────────
   asyncio.to_thread (pandas, não bloqueia o event loop):
     ├── get_team_form(home, 10)      → últimos 10 jogos do mandante
@@ -262,12 +333,23 @@ fetch_historical ─────────────────────
     ├── predict_from_match_context() → Poisson: λ, placares, probs
     ├── calculate_goal_risk_score()  → risco de gol nos próximos 15 min
     └── calculate_card_risk_score()  → risco de cartão
-                    │
+  │
+  ├─[skip_narrative]────────────────────────────────────► END
+  │
+  ▼ [ok]
 generate_narrative ─────────────────────────────────────────────
   Groq (moonshotai/kimi-k2-instruct — 131K contexto):
     → headline + analysis + prediction + momentum_signal
     → resposta sempre em Português
+  │
+  ▼
+END
 ```
+
+**Conditional edges (v0.5.0):**
+- `fetch_context → "no_match" → END`: aborta se a partida não foi encontrada na BetsAPI
+- `fetch_historical → "skip_narrative" → END`: pula narrativa se não há match nem prediction
+- Evita chamadas desnecessárias ao LLM e erros em cascata
 
 **Por que `asyncio.gather` dentro de um único nó e não nós paralelos no LangGraph?**
 O LangGraph suporta fan-out nativo mas adiciona overhead de serialização de estado. Para 4 chamadas I/O que retornam em ~2s, `asyncio.gather` dentro do nó é mais simples e igualmente eficiente.
@@ -276,7 +358,7 @@ O LangGraph suporta fan-out nativo mas adiciona overhead de serialização de es
 
 ## Ferramentas LLM (Tool-Calling)
 
-O endpoint `/ask` usa um loop agentico com até **3 rodadas** de chamadas a ferramentas. O LLM decide automaticamente quais ferramentas usar baseado na pergunta do usuário.
+O endpoint `/ask` usa um loop agentico com até **5 rodadas** de chamadas a ferramentas (aumentado de 3 para perguntas complexas com múltiplas fontes). O LLM decide automaticamente quais ferramentas usar baseado na pergunta do usuário.
 
 ### Ferramentas disponíveis (7)
 
@@ -440,9 +522,9 @@ python scripts/train_model.py
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/predictions/?home=Arsenal&away=Chelsea` | Previsão Poisson pré-jogo (aceita `?referee=`) |
-| GET | `/predictions/?home=X&away=Y&referee=Z` | Previsão com ajuste de árbitro |
-| GET | `/predictions/inplay?home=X&away=Y&home_goals=N&away_goals=N&minute=N` | **Previsão Bayesiana in-play por nome** |
+| GET | `/predictions/?home=Arsenal&away=Chelsea` | Previsão Poisson pré-jogo (aceita `?referee=`, `?stadium=`, `?city=`, `?match_hour_utc=`) |
+| GET | `/predictions/?home=X&away=Y&referee=Z&stadium=Emirates+Stadium` | Previsão com árbitro + ajuste climático |
+| GET | `/predictions/inplay?home=X&away=Y&home_goals=N&away_goals=N&minute=N` | **In-play Non-Homogeneous Poisson** (aceita `?home_red=N&away_red=N`) |
 | GET | `/predictions/{id}` | Previsão Poisson via event_id |
 | GET | `/predictions/{id}/inplay` | **In-play automático** — busca placar/minuto da BetsAPI |
 | GET | `/predictions/{id}/full-analysis` | **Análise completa — agente LangGraph** |
@@ -466,6 +548,7 @@ python scripts/train_model.py
 | GET | `/analytics/referees` | Lista todos os árbitros do dataset |
 | GET | `/analytics/referees/{name}/stats` | Estatísticas do árbitro: cartões/jogo, faltas, home win rate |
 | GET | `/analytics/model/calibration?n=500` | **Backtesting do modelo** com Brier scores em N jogos recentes |
+| GET | `/analytics/weather?stadium=X&city=Y&match_hour_utc=N` | **Clima em tempo real** para estádio — retorna `goal_factor` |
 
 ---
 
