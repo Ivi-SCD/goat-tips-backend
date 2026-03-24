@@ -17,7 +17,8 @@ Frontend (polling)
 FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
      ├── /matches      → BetsAPI tempo real: ao vivo, upcoming, H2H, stats, lineup
      ├── /predictions  → Modelo Poisson + Agente LangGraph + Groq LLM
-     └── /analytics    → Dataset histórico: 4,585 jogos, 86K stats, 229K eventos
+     ├── /analytics    → Dataset histórico: 4,585 jogos, 86K stats, 229K eventos
+     └── /telegram     → Bot Telegram: webhook + histórico de conversa por usuário
           │
           ├── app/routers/          # Camada HTTP
           ├── app/services/
@@ -28,6 +29,7 @@ FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
           │   ├── llm_client.py     # Groq client singleton (openai SDK)
           │   ├── conversation.py   # Histórico de sessão no Supabase (JSONB)
           │   ├── search.py         # Vertex AI Search (Google Discovery Engine)
+          │   ├── telegram.py       # Cliente Telegram Bot API (httpx)
           │   └── tools.py          # 7 ferramentas LLM + dispatcher async
           ├── app/repositories/
           │   ├── historical.py     # CSVs → pandas in-memory (lru_cache)
@@ -451,6 +453,53 @@ O sistema de aliases (`_normalize()`) mapeia automaticamente nomes como "Manches
 
 ---
 
+## Bot Telegram
+
+A integração Telegram expõe o pipeline `/ask` diretamente no chat. Qualquer mensagem enviada ao bot é processada pelo `answer_general_question` (mesmo agente do endpoint `POST /predictions/ask`) e a resposta é devolvida formatada em HTML.
+
+### Fluxo
+
+```
+Usuário → Telegram → POST /telegram/webhook
+                          │
+                          ▼ (background task — retorna 200 imediatamente)
+                    answer_general_question(texto, histórico)
+                          │
+                          ▼
+                    sendMessage(chat_id, resposta HTML)
+                          │
+                          ▼
+                    Usuário recebe resposta
+```
+
+### Histórico por usuário
+
+O bot mantém histórico de conversa individual usando `tg_{user_id}` como `session_id`, reutilizando a mesma tabela `conversation_sessions` do Supabase. O usuário pode limpar seu histórico com o comando `/clear`.
+
+### Comandos disponíveis
+
+| Comando | Descrição |
+|---------|-----------|
+| `/start` | Mensagem de boas-vindas com exemplos de uso |
+| `/help` | Lista de comandos disponíveis |
+| `/clear` | Limpa o histórico de conversa do usuário |
+
+### Configuração após deploy
+
+1. Obtenha o token do bot com o [@BotFather](https://t.me/BotFather) no Telegram
+2. Adicione `TELEGRAM_TOKEN=<token>` ao `.env` e às variáveis de ambiente do Code Engine
+3. Após o deploy, registre o webhook uma vez:
+
+```bash
+POST /telegram/set-webhook?url=https://<seu-dominio>/telegram/webhook
+```
+
+4. Verifique o status com `GET /telegram/webhook/info`
+
+> **Nota:** o webhook exige HTTPS. Em desenvolvimento local, use [ngrok](https://ngrok.com/) ou outro túnel para expor o servidor.
+
+---
+
 ## Histórico de Conversa
 
 O endpoint `/predictions/{id}/ask` suporta histórico de conversa por sessão, armazenado no Supabase.
@@ -489,7 +538,8 @@ cp .env.example .env
 # BETSAPI_TOKEN, GROQ_API_KEY, GROQ_MODEL,
 # SUPABASE_DB_URL, SUPABASE_DB_URL_ASYNC,
 # IBM_COS_ACCESS_KEY_ID, IBM_COS_SECRET_ACCESS_KEY,
-# IBM_COS_ENDPOINT, IBM_COS_BUCKET
+# IBM_COS_ENDPOINT, IBM_COS_BUCKET,
+# TELEGRAM_TOKEN  (opcional — necessário apenas para o bot Telegram)
 
 # Treina o modelo (ou baixa do IBM COS automaticamente na 1ª requisição)
 python scripts/train_model.py
@@ -527,7 +577,14 @@ ibmcloud ce application update --name goat-tips-backend-api \
   --env IBM_COS_ACCESS_KEY_ID=<key_id> \
   --env IBM_COS_SECRET_ACCESS_KEY=<secret> \
   --env IBM_COS_ENDPOINT=https://s3.us-south.cloud-object-storage.appdomain.cloud \
-  --env IBM_COS_BUCKET=goat-tips-bucket
+  --env IBM_COS_BUCKET=goat-tips-bucket \
+  --env TELEGRAM_TOKEN=<token>
+```
+
+Após o deploy, registre o webhook do Telegram uma vez:
+
+```bash
+curl -X POST "https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud/telegram/set-webhook?url=https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud/telegram/webhook"
 ```
 
 ### CE Jobs (daily sync + retrain)
@@ -598,6 +655,15 @@ python scripts/train_model.py
 | POST | `/predictions/ask` | Pergunta geral sobre a Premier League (sem event_id) |
 | DELETE | `/predictions/{id}/ask/history` | Limpa histórico de sessão (`?session_id=` obrigatório) |
 
+### `/telegram` — Bot Telegram
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/telegram/webhook` | Recebe updates do Telegram — configurar como webhook no BotFather |
+| POST | `/telegram/set-webhook?url=<url>` | Registra a URL do webhook no Telegram (executar uma vez após deploy) |
+| DELETE | `/telegram/webhook` | Remove o webhook registrado |
+| GET | `/telegram/webhook/info` | Status e URL do webhook atual |
+
 ### `/analytics` — Dataset histórico
 
 | Método | Rota | Descrição |
@@ -634,7 +700,7 @@ edscript/
 │   ├── repositories/
 │   │   ├── historical.py    # CSVs → pandas (lru_cache, in-memory)
 │   │   └── database.py      # Supabase upsert bulk (asyncpg)
-│   ├── routers/             # matches / predictions / analytics
+│   ├── routers/             # matches / predictions / analytics / telegram
 │   ├── schemas/             # match / prediction / analytics / agent
 │   └── services/
 │       ├── betsapi.py       # Cliente BetsAPI async — todos os endpoints
@@ -644,6 +710,7 @@ edscript/
 │       ├── analytics.py     # Lógica analytics histórico
 │       ├── conversation.py  # Histórico de chat por sessão (Supabase JSONB)
 │       ├── search.py        # Vertex AI Search (Google Discovery Engine)
+│       ├── telegram.py      # Cliente Telegram Bot API (send_message, set_webhook)
 │       └── tools.py         # 7 ferramentas LLM + dispatcher async
 ├── jobs/
 │   └── daily_sync/          # CE Job — sync diário BetsAPI → Supabase
