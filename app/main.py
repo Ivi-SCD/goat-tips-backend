@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from app.routers import matches_router, predictions_router, analytics_router
+from app.routers import matches_router, predictions_router, analytics_router, telegram_router
 
 load_dotenv()
 
@@ -16,6 +16,7 @@ app = FastAPI(
         "| `/matches` | Partidas ao vivo, futuras, H2H, stats, escalações |\n"
         "| `/predictions` | Modelo Poisson + análise completa do agente LangGraph |\n"
         "| `/analytics` | Dataset histórico: forma, padrões de gol/cartão, risco |\n"
+        "| `/telegram` | Integração Telegram: webhook, configuração e respostas via bot |\n"
     ),
     version="0.3.0",
     docs_url="/docs",
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(matches_router)
 app.include_router(predictions_router)
 app.include_router(analytics_router)
+app.include_router(telegram_router)
 
 
 @app.get("/health", tags=["Sistema"])

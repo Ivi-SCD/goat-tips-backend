@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from app.services import betsapi
 from app.services import conversation
 from app.services.narrative import generate_narrative, answer_question, answer_general_question
+from app.services.telegram import publish_narrative_to_channel
 from app.services.predictor import predict_match, predict_from_match_context, predict_inplay, ScorePrediction
 from app.services.weather import get_match_weather
 from app.schemas.match import MatchContext, NarrativeResponse
@@ -208,6 +209,19 @@ async def get_full_analysis(event_id: str):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro no agente: {e}")
+
+    if analysis.narrative:
+        n = analysis.narrative
+        asyncio.create_task(publish_narrative_to_channel(
+            home=analysis.match.home.name if analysis.match else "?",
+            away=analysis.match.away.name if analysis.match else "?",
+            headline=n.headline,
+            analysis=n.analysis,
+            prediction=n.prediction,
+            confidence_label=n.confidence_label,
+            momentum_signal=n.momentum_signal,
+        ))
+
     return analysis
 
 
@@ -218,7 +232,17 @@ async def get_narrative(event_id: str):
     match = await betsapi.get_match_by_id(event_id)
     if not match:
         raise HTTPException(status_code=404, detail="Partida não encontrada")
-    return await generate_narrative(match)
+    response = await generate_narrative(match)
+    asyncio.create_task(publish_narrative_to_channel(
+        home=match.home.name,
+        away=match.away.name,
+        headline=response.headline,
+        analysis=response.analysis,
+        prediction=response.prediction,
+        confidence_label=response.confidence_label,
+        momentum_signal=response.momentum_signal,
+    ))
+    return response
 
 
 @router.post("/{event_id}/ask", response_model=NarrativeResponse,

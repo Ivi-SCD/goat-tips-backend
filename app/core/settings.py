@@ -31,6 +31,10 @@ class Config(BaseSettings):
     # Google / Vertex AI Search (web_search tool for /ask endpoint)
     GOOGLE_SA_JSON_PATH: str = os.getenv("GOOGLE_SA_JSON_PATH", "config/gcp_service_account.json")
 
+    # Telegram Bot
+    TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
+    TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "@goat_tips_32")
+
     # Misc
     KAGGLE_API_KEY: str = os.getenv("KAGGLE_API_KEY", "")
 
