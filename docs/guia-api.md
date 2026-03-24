@@ -31,6 +31,8 @@ A Goat Tips API possui três módulos:
 | `/predictions` | Modelo Poisson + LLM (Groq) | 1–15 s |
 | `/analytics` | Dataset histórico (4,585 jogos) | <50 ms (cacheado) |
 
+![Casos de Uso — Visão Geral](diagrams/assets/09-use-cases.svg)
+
 ---
 
 ## Autenticação
@@ -40,6 +42,8 @@ Nenhuma autenticação é necessária para consumir a API. As chaves de terceiro
 ---
 
 ## Módulo `/matches`
+
+![Casos de Uso — /matches](diagrams/assets/16-use-cases-matches.svg)
 
 ### `GET /matches/live`
 
@@ -78,6 +82,8 @@ curl $BASE/matches/live
 - `probabilities.home_win`: probabilidade real sem margem da casa (0–1)
 - `kick_off_time`: horário de início em UTC (exibir como horário local no frontend)
 - `stadium` e `referee`: contexto adicional para enriquecer a UI
+
+![Fluxo — Partidas ao Vivo](diagrams/assets/08-live-matches-flow.svg)
 
 ---
 
@@ -232,6 +238,8 @@ curl $BASE/matches/toplist
 ---
 
 ## Módulo `/predictions`
+
+![Casos de Uso — /predictions](diagrams/assets/17-use-cases-predictions.svg)
 
 ### `GET /predictions/?home=Arsenal&away=Chelsea`
 
@@ -438,6 +446,10 @@ curl $BASE/predictions/12345678/full-analysis
 - `card_risk_score`: medidor visual de risco de cartão
 - `agent_steps`: útil para debug / loading states no frontend
 
+![Fluxo — Full Analysis](diagrams/assets/05-full-analysis-flow.svg)
+
+![Sequência — Full Analysis](diagrams/assets/10-sequence-full-analysis.svg)
+
 ---
 
 ### `POST /predictions/{event_id}/ask`
@@ -557,6 +569,10 @@ narrative_verifier → LLM (Groq): sintetiza em Português com confidence_label
 
 **Suporta `?session_id=` em ambos os endpoints para histórico de conversa.**
 
+![Fluxo — Histórico de Conversa](diagrams/assets/07-conversation-flow.svg)
+
+![Sequência — Pergunta com Histórico](diagrams/assets/11-sequence-ask-question.svg)
+
 ---
 
 ### `POST /predictions/{event_id}/narrative`
@@ -570,6 +586,8 @@ curl -X POST $BASE/predictions/12345678/narrative
 ---
 
 ## Módulo `/analytics`
+
+![Casos de Uso — /analytics](diagrams/assets/18-use-cases-analytics.svg)
 
 ### `GET /analytics/teams`
 
@@ -1033,3 +1051,11 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `defensive_index` | float | FBref: `(Tkl+Int+Blocks+Clr)` ponderado — solidez defensiva |
 | `squad_depth` | int | Número de jogadores com ≥5 90s jogados no elenco |
 | `impact_score` | float 0–10 | Score de impacto de ausência de jogador: `(Gls + Ast + 90s×0.1) / max_do_time × 10` |
+
+---
+
+## Schemas de Dados
+
+![Schemas — Domínio Match](diagrams/assets/13-schemas-match.svg)
+
+![Schemas — Prediction, Analytics & Agent](diagrams/assets/14-schemas-prediction-analytics.svg)

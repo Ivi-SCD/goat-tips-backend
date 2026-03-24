@@ -1,0 +1,229 @@
+title: Goat Tips — Schemas: Prediction, Analytics & Agent {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+direction: down
+
+# ─────────────────────────────────────────────
+# PREDICTION
+# ─────────────────────────────────────────────
+grp_pred: Prediction {
+  style.fill: "#FFF7ED"
+  style.stroke: "#EA580C"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  ScorePredictionResponse: ScorePredictionResponse {
+    shape: class
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.stroke-width: 2
+
+    home_team: str
+    away_team: str
+    lambda_home: float
+    lambda_away: float
+    home_win_prob: float
+    draw_prob: float
+    away_win_prob: float
+    over_2_5_prob: float
+    btts_prob: float
+    most_likely_score: str
+    most_likely_score_prob: float
+    top_scores: "list[tuple[str, float]]"
+    score_matrix: "list[list[float]]"
+    confidence: str
+    model_note: str
+  }
+}
+
+# ─────────────────────────────────────────────
+# ANALYTICS
+# ─────────────────────────────────────────────
+grp_analytics: Analytics {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  H2HMatch: H2HMatch {
+    shape: class
+    style.fill: "#A7F3D0"
+    style.stroke: "#059669"
+    style.stroke-width: 2
+
+    event_id: str
+    date: "Optional[str]"
+    home_team: str
+    away_team: str
+    score_home: int
+    score_away: int
+    winner: str
+  }
+
+  H2HRecord: H2HRecord {
+    shape: class
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.stroke-width: 2
+
+    home_team: str
+    away_team: str
+    total_matches: int
+    home_wins: int
+    away_wins: int
+    draws: int
+    home_goals_avg: float
+    away_goals_avg: float
+    last_matches: "list[H2HMatch]"
+  }
+
+  MatchResult: MatchResult {
+    shape: class
+    style.fill: "#A7F3D0"
+    style.stroke: "#059669"
+    style.stroke-width: 2
+
+    event_id: str
+    date: str
+    opponent: str
+    home_or_away: str
+    goals_scored: int
+    goals_conceded: int
+    result: str
+  }
+
+  TeamForm: TeamForm {
+    shape: class
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.stroke-width: 2
+
+    team_name: str
+    last_n_matches: int
+    matches: "list[MatchResult]"
+    wins: int
+    draws: int
+    losses: int
+    goals_scored: int
+    goals_conceded: int
+    form_string: str
+    avg_goals_scored: float
+    avg_goals_conceded: float
+  }
+
+  GoalMinuteBucket: GoalMinuteBucket {
+    shape: class
+    style.fill: "#A7F3D0"
+    style.stroke: "#059669"
+    style.stroke-width: 2
+
+    minute_range: str
+    goals: int
+    pct_of_total: float
+  }
+
+  GoalPatterns: GoalPatterns {
+    shape: class
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.stroke-width: 2
+
+    total_goals: int
+    buckets: "list[GoalMinuteBucket]"
+    peak_minute_range: str
+    avg_goals_per_match: float
+  }
+
+  CardPattern: CardPattern {
+    shape: class
+    style.fill: "#A7F3D0"
+    style.stroke: "#059669"
+    style.stroke-width: 2
+
+    minute_range: str
+    yellow_cards: int
+    red_cards: int
+    pct_of_total: float
+  }
+
+  CardPatterns: CardPatterns {
+    shape: class
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.stroke-width: 2
+
+    total_yellows: int
+    total_reds: int
+    buckets: "list[CardPattern]"
+    peak_minute_range: str
+  }
+
+  H2HRecord -> H2HMatch: last_matches (0..*)
+  TeamForm -> MatchResult: matches (0..*)
+  GoalPatterns -> GoalMinuteBucket: buckets (1..*)
+  CardPatterns -> CardPattern: buckets (1..*)
+}
+
+# ─────────────────────────────────────────────
+# AGENT STATE
+# ─────────────────────────────────────────────
+grp_agent: Agent {
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  AgentState: AgentState (TypedDict) {
+    shape: class
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.stroke-width: 2
+
+    event_id: str
+    match: "Optional[MatchContext]"
+    h2h: "Optional[H2HRecord]"
+    stats_trend: "Optional[StatsTrend]"
+    lineup: "Optional[LineupInfo]"
+    home_form: "Optional[TeamForm]"
+    away_form: "Optional[TeamForm]"
+    prediction: "Optional[ScorePredictionResponse]"
+    narrative: "Optional[NarrativeResponse]"
+    goal_risk_score: "Optional[float]"
+    card_risk_score: "Optional[float]"
+    agent_steps: "list[str]"
+    errors: "list[str]"
+  }
+
+  FullMatchAnalysis: FullMatchAnalysis {
+    shape: class
+    style.fill: "#DDD6FE"
+    style.stroke: "#7C3AED"
+    style.stroke-width: 3
+
+    match: MatchContext
+    narrative: NarrativeResponse
+    prediction: "Optional[ScorePredictionResponse]"
+    h2h: "Optional[H2HRecord]"
+    stats_trend: "Optional[StatsTrend]"
+    lineup: "Optional[LineupInfo]"
+    home_form: "Optional[TeamForm]"
+    away_form: "Optional[TeamForm]"
+    goal_risk_score: "Optional[float]"
+    card_risk_score: "Optional[float]"
+    agent_steps: "list[str]"
+  }
+}
+
+# ─────────────────────────────────────────────
+# RELACIONAMENTOS ENTRE GRUPOS
+# ─────────────────────────────────────────────
+grp_agent.AgentState -> grp_analytics.H2HRecord: h2h
+grp_agent.AgentState -> grp_analytics.TeamForm: home_form, away_form
+grp_agent.AgentState -> grp_pred.ScorePredictionResponse: prediction
+
+grp_agent.FullMatchAnalysis -> grp_analytics.H2HRecord: h2h
+grp_agent.FullMatchAnalysis -> grp_analytics.TeamForm: home_form, away_form
+grp_agent.FullMatchAnalysis -> grp_pred.ScorePredictionResponse: prediction

@@ -1,0 +1,37 @@
+title: Goat Tips — Casos de Uso: Jobs Agendados {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+scheduler: CE Job Scheduler\n(IBM Cloud Cron) {
+  shape: person
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/DevOps/Continuous%20Delivery.svg
+  style.fill: "#EEF2FF"
+  style.stroke: "#0F62FE"
+  style.stroke-width: 2
+  style.font-size: 13
+}
+
+system: Goat Tips — Jobs Agendados {
+  style.fill: "#F8FAFC"
+  style.stroke: "#1E293B"
+  style.stroke-width: 3
+  style.border-radius: 14
+
+  uc22: "Sync diário BetsAPI\n-> Supabase (0 3 * * *)" {
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+  uc23: "Retreino semanal\ndo modelo Poisson (0 3 * * 1)" {
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.border-radius: 6
+    style.font-size: 12
+  }
+}
+
+scheduler -> system.uc22
+scheduler -> system.uc23

@@ -1,0 +1,67 @@
+title: Goat Tips — Sequência: Ciclo Semanal de Retreinamento {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+shape: sequence_diagram
+
+scheduler: IBM Cloud\nScheduler (Cron) {
+  style.fill: "#EEF2FF"
+  style.stroke: "#0F62FE"
+}
+retrain_job: CE Job\ngoat-tips-retrain {
+  style.fill: "#DBEAFE"
+  style.stroke: "#0F62FE"
+}
+supabase: Supabase\nPostgreSQL {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+}
+trainer: PoissonTrainer\n(Dixon-Coles) {
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+}
+cos: IBM COS\ngoat-tips-bucket {
+  style.fill: "#EEF2FF"
+  style.stroke: "#4F46E5"
+}
+api: FastAPI\ngoat-tips-backend-api {
+  style.fill: "#E0FFF8"
+  style.stroke: "#009485"
+}
+client: Cliente {
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+}
+
+# ─── TRIGGER SEMANAL ─────────────────────────
+scheduler -> retrain_job: 0 3 * * 1 UTC\n(toda segunda-feira)
+
+# ─── BUSCA DADOS ─────────────────────────────
+retrain_job -> supabase: SELECT * FROM events\nWHERE time_status = 'ended'\nORDER BY time_utc
+supabase -> retrain_job: 4 585+ jogos\n(updated diariamente pelo sync job)
+
+# ─── TREINO ──────────────────────────────────
+retrain_job -> trainer: fit(events_df)
+trainer -> trainer: Calcula attack_i, defense_i\npor time, normaliza pela média
+trainer -> trainer: Calcula league_avg_home_goals,\nleague_avg_away_goals
+trainer -> trainer: Serializa PoissonModel\ncom joblib.dump()
+trainer -> retrain_job: poisson_model.pkl (~2 MB)
+
+# ─── UPLOAD ──────────────────────────────────
+retrain_job -> cos: boto3 s3.upload_file(\n  poisson_model.pkl,\n  bucket=goat-tips-bucket\n)
+cos -> retrain_job: 200 OK
+
+# ─── PRÓXIMA REQUISIÇÃO ──────────────────────
+client -> api: "GET /predictions/{id}"
+api -> api: get_model() — pkl local não existe\n(novo container ou expirado)
+api -> cos: boto3 s3.download_file(\n  poisson_model.pkl\n)
+cos -> api: poisson_model.pkl (novo)
+api -> api: Carrega modelo em memória\n(lru_cache — 1 download por instância)
+api -> client: ScorePredictionResponse\n(com modelo atualizado)
+
+# ─── SYNC DIÁRIO (paralelo) ──────────────────
+scheduler -> retrain_job: 0 3 * * * UTC\n(diariamente — daily_sync job)
+retrain_job -> supabase: Fetch novos jogos BetsAPI\nUPSERT events + stats + timeline
+supabase -> retrain_job: OK — dataset atualizado

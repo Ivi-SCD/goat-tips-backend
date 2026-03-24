@@ -40,6 +40,12 @@ FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
           └── app/schemas/          # Pydantic schemas por domínio
 ```
 
+![Arquitetura do Sistema](docs/diagrams/assets/01-system-architecture.svg)
+
+![Arquitetura em Camadas](docs/diagrams/assets/04-layered-architecture.svg)
+
+![Dependências entre Módulos](docs/diagrams/assets/03-module-dependencies.svg)
+
 ### Infraestrutura IBM Cloud
 
 | Recurso | Tipo | Função |
@@ -51,6 +57,8 @@ FastAPI — IBM Code Engine (goat-tips-backend-api, us-east)
 | `goat-tips-bucket` | IBM Cloud Object Storage (us-south) | Artefato do modelo (`poisson_model.pkl`) |
 | Groq API | LLM (moonshotai/kimi-k2-instruct) | Narrativas em Português — 131K contexto, 1T MoE |
 | Supabase (us-west-2) | PostgreSQL | 4,585 jogos · 86K stats · 229K timeline · 20K odds · histórico de chat |
+
+![Infraestrutura IBM Cloud](docs/diagrams/assets/02-infrastructure.svg)
 
 ---
 
@@ -110,6 +118,8 @@ O Supabase (PostgreSQL) armazena os dados históricos, os novos jogos sincroniza
 **Views úteis:**
 - `v_matches` — join completo com nomes dos times
 - `v_goal_timeline` — gols por minuto (filtra ruído: só linhas `N' - Goal...`)
+
+![Diagrama ER — Banco de Dados](docs/diagrams/assets/15-database-er.svg)
 
 ---
 
@@ -329,6 +339,10 @@ O modelo é re-treinado toda segunda-feira às 03:00 UTC pelo **IBM Code Engine 
 3. Treina inline a partir do CSV com time-decay e split home/away (último recurso — ~5s)
 ```
 
+![Carregamento do Modelo Poisson](docs/diagrams/assets/06-poisson-model-loading.svg)
+
+![Sequência — Retreinamento Semanal](docs/diagrams/assets/12-sequence-model-retrain.svg)
+
 ---
 
 ## Agente LangGraph
@@ -373,6 +387,10 @@ END
 - `fetch_context → "no_match" → END`: aborta se a partida não foi encontrada na BetsAPI
 - `fetch_historical → "skip_narrative" → END`: pula narrativa se não há match nem prediction
 - Evita chamadas desnecessárias ao LLM e erros em cascata
+
+![Fluxo — Full Analysis](docs/diagrams/assets/05-full-analysis-flow.svg)
+
+![Sequência — Full Analysis](docs/diagrams/assets/10-sequence-full-analysis.svg)
 
 **Por que `asyncio.gather` dentro de um único nó e não nós paralelos no LangGraph?**
 O LangGraph suporta fan-out nativo mas adiciona overhead de serialização de estado. Para 4 chamadas I/O que retornam em ~2s, `asyncio.gather` dentro do nó é mais simples e igualmente eficiente.
@@ -513,6 +531,10 @@ O endpoint `/predictions/{id}/ask` suporta histórico de conversa por sessão, a
 **Por que 6 pares?**
 Típico de uma sessão de análise de partida (< 10 perguntas). A janela deslizante descarta pares mais antigos silenciosamente — sem sumarização necessária para esse volume.
 
+![Fluxo — Histórico de Conversa](docs/diagrams/assets/07-conversation-flow.svg)
+
+![Sequência — Pergunta com Histórico](docs/diagrams/assets/11-sequence-ask-question.svg)
+
 ---
 
 ## Diagramas de Arquitetura
@@ -628,6 +650,10 @@ python scripts/train_model.py
 
 ## Endpoints
 
+![Casos de Uso — Visão Geral](docs/diagrams/assets/09-use-cases.svg)
+
+![Casos de Uso — /matches](docs/diagrams/assets/16-use-cases-matches.svg)
+
 ### `/matches` — Tempo real
 
 | Método | Rota | Descrição |
@@ -639,6 +665,8 @@ python scripts/train_model.py
 | GET | `/matches/{id}/h2h` | Histórico H2H via BetsAPI |
 | GET | `/matches/{id}/stats-trend` | Momentum tático por período |
 | GET | `/matches/{id}/lineup` | Escalações confirmadas |
+
+![Casos de Uso — /predictions](docs/diagrams/assets/17-use-cases-predictions.svg)
 
 ### `/predictions` — Modelo + LLM
 
@@ -680,6 +708,10 @@ python scripts/train_model.py
 | GET | `/analytics/referees/{name}/stats` | Estatísticas do árbitro: cartões/jogo, faltas, home win rate |
 | GET | `/analytics/model/calibration?n=500` | **Backtesting do modelo** com Brier scores em N jogos recentes |
 | GET | `/analytics/weather?stadium=X&city=Y&match_hour_utc=N` | **Clima em tempo real** para estádio — retorna `goal_factor` |
+
+### CE Jobs — Automação
+
+![Casos de Uso — Jobs](docs/diagrams/assets/19-use-cases-jobs.svg)
 
 ---
 
