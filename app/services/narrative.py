@@ -3,15 +3,21 @@ Narrative Service
 =================
 Generates Portuguese match analysis narratives via Groq.
 LLM client configuration lives in app.services.llm_client.
+
+The /ask endpoint uses an agentic tool-calling loop (answer_question):
+  - Up to MAX_TOOL_ROUNDS rounds where the LLM may call any tool in tools.TOOLS
+  - Tools: web_search, get_team_form, get_team_stats, get_h2h_stats, get_upcoming_odds
+  - After tool results are injected the LLM produces a final NarrativeResponse JSON
 """
 
+import asyncio
 import json
 from typing import Optional
 
 from app.schemas.analytics import H2HRecord, TeamForm
 from app.schemas.match import MatchContext, NarrativeResponse, StatsTrend
 from app.schemas.prediction import ScorePredictionResponse
-from app.services.llm_client import MODEL, SYSTEM_PROMPT, client
+from app.services.llm_client import MODEL, SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT, client
 
 
 # ── Context builders ──────────────────────────────────────────────────────────
@@ -153,6 +159,41 @@ def _append_prediction_context(
     ]
 
 
+# ── LLM response parser ───────────────────────────────────────────────────────
+
+def _parse_llm_raw(match_id: str, raw: str) -> NarrativeResponse:
+    """Parse a raw LLM text response (possibly fenced JSON) into NarrativeResponse."""
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return NarrativeResponse(
+            match_id=match_id,
+            headline="Resposta fora do formato esperado",
+            analysis=raw,
+            prediction="Não foi possível estruturar a previsão automaticamente.",
+            momentum_signal=None,
+            confidence_label="Baixa",
+        )
+    return NarrativeResponse(
+        match_id=match_id,
+        headline=parsed["headline"],
+        analysis=parsed["analysis"],
+        prediction=parsed["prediction"],
+        momentum_signal=parsed.get("momentum_signal"),
+        confidence_label=parsed["confidence_label"],
+    )
+
+
+_EMPTY_RAW = json.dumps({
+    "headline": "Sem resposta do modelo", "analysis": "", "prediction": "",
+    "momentum_signal": None, "confidence_label": "Baixa",
+})
+
+
 # ── LLM call helper ───────────────────────────────────────────────────────────
 
 async def _call_llm(
@@ -168,42 +209,9 @@ async def _call_llm(
         messages.extend(history)
     messages.append({"role": "user", "content": context})
 
-    message = await client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-    )
-    raw = (message.choices[0].message.content or "").strip() if message.choices else ""
-    if not raw:
-        raw = json.dumps({
-            "headline": "Sem resposta do modelo", "analysis": "", "prediction": "",
-            "momentum_signal": None, "confidence_label": "Baixa",
-        })
-
-    if raw.startswith("```"):
-        raw = raw.split("```", 2)[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return NarrativeResponse(
-            match_id=match_id,
-            headline="Resposta fora do formato esperado",
-            analysis=raw,
-            prediction="Não foi possível estruturar a previsão automaticamente.",
-            momentum_signal=None,
-            confidence_label="Baixa",
-        )
-
-    return NarrativeResponse(
-        match_id=match_id,
-        headline=parsed["headline"],
-        analysis=parsed["analysis"],
-        prediction=parsed["prediction"],
-        momentum_signal=parsed.get("momentum_signal"),
-        confidence_label=parsed["confidence_label"],
-    )
+    response = await client.chat.completions.create(model=MODEL, messages=messages)
+    raw = (response.choices[0].message.content or "").strip() if response.choices else ""
+    return _parse_llm_raw(match_id, raw or _EMPTY_RAW)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -213,19 +221,46 @@ async def generate_narrative(match: MatchContext, user_question: str = "") -> Na
     return await _call_llm(match.event_id, _build_context_prompt(match, user_question))
 
 
+MAX_TOOL_ROUNDS = 5
+
+
 async def answer_question(
     match: MatchContext,
     question: str,
     history: list[dict] | None = None,
 ) -> NarrativeResponse:
-    """Answers a free-form question about the live match.
+    """Answer a free-form question about a specific match using the 6-agent pipeline.
 
-    Pass `history` (list of prior {role, content} dicts) to maintain
-    conversational context across multiple questions in the same session.
+    Delegates to the LangGraph multi-agent supervisor (ask_agent.run_ask_agent).
+    The match context block is pre-built and injected so the agent graph doesn't
+    need to re-fetch it.
     """
-    return await _call_llm(
-        match.event_id,
-        _build_context_prompt(match, user_question=question),
+    from app.agents.ask_agent import run_ask_agent
+
+    match_context_text = _build_context_prompt(match, user_question="")
+    return await run_ask_agent(
+        question=question,
+        event_id=match.event_id,
+        match_context_text=match_context_text,
+        history=history,
+    )
+
+
+async def answer_general_question(
+    question: str,
+    history: list[dict] | None = None,
+) -> NarrativeResponse:
+    """Answer a general Premier League question using the 6-agent pipeline.
+
+    No match context — the agent graph will use live BetsAPI + historical DB
+    to answer from scratch.
+    """
+    from app.agents.ask_agent import run_ask_agent
+
+    return await run_ask_agent(
+        question=question,
+        event_id="",
+        match_context_text="",
         history=history,
     )
 

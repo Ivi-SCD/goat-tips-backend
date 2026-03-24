@@ -28,6 +28,9 @@ class Config(BaseSettings):
     IBM_COS_BUCKET: str = os.getenv("IBM_COS_BUCKET", "goat-tips-bucket")
     MODEL_BLOB_NAME: str = os.getenv("MODEL_BLOB_NAME", "poisson_model.pkl")
 
+    # Google / Vertex AI Search (web_search tool for /ask endpoint)
+    GOOGLE_SA_JSON_PATH: str = os.getenv("GOOGLE_SA_JSON_PATH", "config/gcp_service_account.json")
+
     # Misc
     KAGGLE_API_KEY: str = os.getenv("KAGGLE_API_KEY", "")
 

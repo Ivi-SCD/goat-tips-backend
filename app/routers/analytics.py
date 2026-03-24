@@ -6,10 +6,13 @@ All data comes from local CSV dataset — no external API calls.
 """
 
 import asyncio
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services import analytics
-from app.schemas.analytics import TeamForm, H2HRecord, GoalPatterns, CardPatterns
+from app.services.weather import get_match_weather
+from app.schemas.analytics import TeamForm, H2HRecord, GoalPatterns, CardPatterns, TeamProfile, RefereeStats
 
 router = APIRouter(prefix="/analytics", tags=["Analytics Histórico"])
 
@@ -81,6 +84,105 @@ async def get_card_patterns():
     Resultado cacheado — resposta instantânea após o primeiro acesso.
     """
     return await asyncio.to_thread(analytics.get_card_patterns)
+
+
+@router.get("/referees", summary="Listar todos os árbitros")
+async def list_referees():
+    """Lista todos os árbitros no dataset histórico da Premier League (2014–2026)."""
+    referees = await asyncio.to_thread(analytics.get_all_referees)
+    return {"referees": referees, "total": len(referees)}
+
+
+@router.get("/referees/{referee_name}/stats", summary="Estatísticas do árbitro")
+async def get_referee_stats(referee_name: str):
+    """
+    Estatísticas históricas de um árbitro: média de cartões amarelos/vermelhos e faltas por jogo.
+    Nome é case-insensitive e suporta correspondência parcial.
+    """
+    stats = await asyncio.to_thread(analytics.get_referee_stats, referee_name)
+    if not stats:
+        raise HTTPException(404, detail=f"Árbitro '{referee_name}' não encontrado no dataset")
+    return stats
+
+
+@router.get("/teams/{team_name}/profile", summary="Perfil completo do time")
+async def get_team_profile(team_name: str):
+    """
+    Perfil avançado do time incluindo:
+    - Shot efficiency (gols / chutes no alvo)
+    - xG médio por jogo
+    - Distribuição de gols por half (1T vs 2T)
+    - Taxa de vitória e média de gols em casa vs fora
+    """
+    profile = await asyncio.to_thread(analytics.get_team_profile, team_name)
+    if not profile:
+        raise HTTPException(404, detail=f"Time '{team_name}' não encontrado no dataset")
+    return profile
+
+
+@router.get("/model/calibration", summary="Calibração e backtesting do modelo")
+async def get_model_calibration(
+    n: int = Query(default=500, ge=50, le=4000, description="Número de jogos recentes para backtest"),
+):
+    """
+    **Backtesting do modelo Poisson** nos últimos N jogos encerrados.
+
+    Retorna para cada mercado (home_win, draw, away_win, over_2.5, btts):
+    - **Brier Score** — erro quadrático médio (menor = melhor, 0 = perfeito)
+    - **Calibration bins** — comparação entre probabilidade prevista e frequência real
+    - Se avg_predicted ≈ avg_actual em cada bin, o modelo está bem calibrado
+
+    Tempo: ~10s para 500 jogos (cacheado após primeira chamada).
+    """
+    return await asyncio.to_thread(analytics.get_model_calibration, n)
+
+
+@router.get("/weather", summary="Condições climáticas para um estádio")
+async def get_weather(
+    stadium: Optional[str] = Query(default=None, description="Nome do estádio (ex: Emirates Stadium)"),
+    city: Optional[str] = Query(default=None, description="Cidade (fallback quando estádio não encontrado)"),
+    match_hour_utc: Optional[int] = Query(default=None, ge=0, le=23, description="Hora do jogo em UTC"),
+):
+    """
+    Retorna condições climáticas atuais ou previstas para um estádio da Premier League.
+
+    Usa a **Open-Meteo API** (gratuita, sem chave). Suporta:
+    - 24+ estádios da Premier League por nome exato ou parcial
+    - Fallback por cidade
+    - Previsão horária para a hora exata do jogo (UTC)
+
+    O campo `goal_factor` indica o impacto no modelo de gols:
+    - `1.0` = sem impacto (clima neutro)
+    - `0.85` = tempestade forte (reduz gols esperados em ~15%)
+
+    Exemplos:
+    - `GET /analytics/weather?stadium=Emirates+Stadium`
+    - `GET /analytics/weather?city=London&match_hour_utc=15`
+    """
+    if not stadium and not city:
+        raise HTTPException(400, detail="Informe 'stadium' ou 'city'")
+
+    weather = await get_match_weather(stadium, city, match_hour_utc)
+    if not weather:
+        raise HTTPException(404, detail="Estádio/cidade não encontrado ou API de clima indisponível")
+
+    return {
+        "stadium": stadium,
+        "city": city,
+        "weather_code": weather.weather_code,
+        "condition": weather.condition_label,
+        "description": weather.description,
+        "precipitation_mm": weather.precipitation_mm,
+        "wind_speed_kmh": weather.wind_speed_kmh,
+        "temperature_c": weather.temperature_c,
+        "goal_factor": weather.goal_factor,
+        "source": weather.source,
+        "impact": "neutro" if weather.goal_factor >= 0.99 else (
+            "leve" if weather.goal_factor >= 0.94 else (
+                "moderado" if weather.goal_factor >= 0.87 else "severo"
+            )
+        ),
+    }
 
 
 @router.get("/risk-scores", summary="Scores de risco ao vivo")

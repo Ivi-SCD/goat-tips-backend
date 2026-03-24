@@ -12,11 +12,13 @@ import logging
 from functools import lru_cache
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from app.repositories.historical import (
     get_all_teams, get_team_events, get_h2h_events,
     get_timeline_goals, get_timeline_cards, count_ended_matches,
+    load_events,
 )
 from app.schemas.analytics import (
     TeamForm, MatchResult, H2HRecord, H2HMatch,
@@ -237,6 +239,168 @@ def calculate_card_risk_score(minute: Optional[int],
     return round(min(max(base + yellow_risk + urgency, 0.0), 10.0), 2)
 
 
+def get_team_profile(team_name: str) -> Optional[dict]:
+    """
+    Extended team profile: shot efficiency, goals by half, home/away splits.
+    Uses stats CSV for shots/xg, timeline for half-time goal distribution.
+    """
+    from app.repositories.historical import get_team_stat_values, get_team_events, get_timeline_goals
+
+    events = get_team_events(team_name)
+    if events.empty:
+        return None
+
+    lower = team_name.lower()
+    # Resolve actual name
+    actual_name = team_name
+    if not events.empty:
+        r = events.iloc[0]
+        if str(r.get("home_team_name", "")).lower() == lower:
+            actual_name = r["home_team_name"]
+        elif str(r.get("away_team_name", "")).lower() == lower:
+            actual_name = r["away_team_name"]
+
+    n = len(events)
+
+    # ── Shot efficiency from stats CSV ──────────────────────────────
+    stat_df = get_team_stat_values(team_name, ["on_target", "goals", "xg"])
+
+    shots = stat_df[stat_df["metric"] == "on_target"]["team_value"].apply(pd.to_numeric, errors="coerce").dropna()
+    goals_stats = stat_df[stat_df["metric"] == "goals"]["team_value"].apply(pd.to_numeric, errors="coerce").dropna()
+    xg_vals = stat_df[stat_df["metric"] == "xg"]["team_value"].apply(pd.to_numeric, errors="coerce").dropna()
+
+    avg_shots = round(float(shots.mean()), 2) if not shots.empty else 0.0
+    avg_goals_stat = round(float(goals_stats.mean()), 2) if not goals_stats.empty else 0.0
+    avg_xg = round(float(xg_vals.mean()), 2) if not xg_vals.empty else 0.0
+    shot_eff = round(avg_goals_stat / avg_shots, 3) if avg_shots > 0 else 0.0
+
+    # ── Goals by half from timeline ──────────────────────────────────
+    goals_tl = get_timeline_goals()
+    team_event_ids = set(events["event_id"].astype(str).tolist())
+    team_goals = goals_tl[goals_tl["event_id"].astype(str).isin(team_event_ids)].copy()
+    team_goals["minute"] = team_goals["text"].apply(_extract_minute)
+    team_goals = team_goals.dropna(subset=["minute"])
+    team_goals["minute"] = team_goals["minute"].astype(int)
+
+    # Filter to only goals scored by this team (text contains team name)
+    # Fallback: use all goals in their matches divided by 2
+    first_half = int((team_goals["minute"] <= 45).sum())
+    second_half = int((team_goals["minute"] > 45).sum())
+    total_goals_half = first_half + second_half
+    goals_per_match = total_goals_half / n if n else 0
+    fh_avg = round(first_half / n, 2) if n else 0.0
+    sh_avg = round(second_half / n, 2) if n else 0.0
+    fh_pct = round(first_half / total_goals_half, 3) if total_goals_half else 0.5
+
+    # ── Home vs Away splits ──────────────────────────────────────────
+    home_events = events[events["home_team_name"].str.lower() == lower].copy()
+    away_events = events[events["away_team_name"].str.lower() == lower].copy()
+
+    def _win_rate(df_side, scored_col, conceded_col):
+        if df_side.empty:
+            return 0.0
+        wins = ((df_side[scored_col].fillna(0).astype(int)) > (df_side[conceded_col].fillna(0).astype(int))).sum()
+        return round(int(wins) / len(df_side), 3)
+
+    home_win_rate = _win_rate(home_events, "home_score", "away_score")
+    away_win_rate = _win_rate(away_events, "away_score", "home_score")
+
+    home_goals_avg = round(home_events["home_score"].fillna(0).astype(int).mean(), 2) if not home_events.empty else 0.0
+    away_goals_avg = round(away_events["away_score"].fillna(0).astype(int).mean(), 2) if not away_events.empty else 0.0
+
+    return {
+        "team_name": actual_name,
+        "sample_size": n,
+        "avg_shots_on_target": avg_shots,
+        "avg_goals_scored": avg_goals_stat,
+        "shot_efficiency": shot_eff,
+        "avg_xg": avg_xg,
+        "goals_by_half": {
+            "first_half_avg": fh_avg,
+            "second_half_avg": sh_avg,
+            "first_half_pct": fh_pct,
+        },
+        "home_win_rate": home_win_rate,
+        "away_win_rate": away_win_rate,
+        "home_goals_avg": float(home_goals_avg),
+        "away_goals_avg": float(away_goals_avg),
+    }
+
+
+def get_referee_stats(referee_name: str) -> Optional[dict]:
+    """Returns per-game averages for a referee: cards, fouls, home win rate."""
+    from app.repositories.historical import get_referee_events, load_stats
+
+    events = get_referee_events(referee_name)
+    if events.empty:
+        return None
+
+    actual_name = str(events.iloc[0].get("referee_name", referee_name))
+    n = len(events)
+    event_ids = events["event_id"].tolist()
+
+    stats = load_stats()
+    ref_stats = stats[stats["event_id"].isin(event_ids)]
+
+    def _avg_metric(metric: str, col: str) -> float:
+        vals = ref_stats[ref_stats["metric"] == metric][col].apply(
+            pd.to_numeric, errors="coerce").dropna()
+        if vals.empty:
+            return 0.0
+        return round(float(vals.sum()) / n, 2)
+
+    avg_yellow = round(
+        (_avg_metric("yellowcards", "home_value") * n +
+         _avg_metric("yellowcards", "away_value") * n) / n, 2
+    )
+    avg_red = round(
+        (_avg_metric("redcards", "home_value") * n +
+         _avg_metric("redcards", "away_value") * n) / n, 2
+    )
+    avg_fouls = round(
+        (_avg_metric("fouls", "home_value") * n +
+         _avg_metric("fouls", "away_value") * n) / n, 2
+    )
+
+    # Simpler approach: sum both sides
+    yc = ref_stats[ref_stats["metric"] == "yellowcards"]
+    if not yc.empty:
+        yc_home = pd.to_numeric(yc["home_value"], errors="coerce").fillna(0).sum()
+        yc_away = pd.to_numeric(yc["away_value"], errors="coerce").fillna(0).sum()
+        avg_yellow = round(float(yc_home + yc_away) / n, 2)
+
+    rc = ref_stats[ref_stats["metric"] == "redcards"]
+    if not rc.empty:
+        rc_home = pd.to_numeric(rc["home_value"], errors="coerce").fillna(0).sum()
+        rc_away = pd.to_numeric(rc["away_value"], errors="coerce").fillna(0).sum()
+        avg_red = round(float(rc_home + rc_away) / n, 2)
+
+    fouls_df = ref_stats[ref_stats["metric"] == "fouls"]
+    if not fouls_df.empty:
+        f_home = pd.to_numeric(fouls_df["home_value"], errors="coerce").fillna(0).sum()
+        f_away = pd.to_numeric(fouls_df["away_value"], errors="coerce").fillna(0).sum()
+        avg_fouls = round(float(f_home + f_away) / n, 2)
+
+    hs = pd.to_numeric(events["home_score"], errors="coerce")
+    as_ = pd.to_numeric(events["away_score"], errors="coerce")
+    home_wins = int((hs > as_).sum())
+    home_win_rate = round(home_wins / n, 3)
+
+    return {
+        "referee_name": actual_name,
+        "matches": n,
+        "avg_yellow_cards": avg_yellow,
+        "avg_red_cards": avg_red,
+        "avg_fouls": avg_fouls,
+        "home_win_rate": home_win_rate,
+    }
+
+
+def get_all_referees() -> list[str]:
+    from app.repositories.historical import get_all_referees as _repo
+    return _repo()
+
+
 def get_team_historical_stats(team_name: str) -> dict:
     form = get_team_form(team_name, n=50)
     if not form:
@@ -259,3 +423,60 @@ def get_team_historical_stats(team_name: str) -> dict:
         "btts_matches": btts,
         "btts_rate": round(btts / total, 3) if total else 0.0,
     }
+
+
+@lru_cache(maxsize=1)
+def get_model_calibration(n_matches: int = 500) -> dict:
+    """Run backtesting on the last N matches and return calibration metrics."""
+    from app.services.predictor import predict_match, get_model
+    get_model()  # ensure loaded
+
+    events = load_events()
+    ended = events[events["time_status"] == 3].copy()
+    ended["home_score"] = pd.to_numeric(ended["home_score"], errors="coerce")
+    ended["away_score"] = pd.to_numeric(ended["away_score"], errors="coerce")
+    ended = ended.dropna(subset=["home_score", "away_score"])
+    ended = ended.sort_values("time_unix", ascending=False).head(n_matches)
+
+    bins = np.arange(0, 1.05, 0.1)
+    markets = {
+        "home_win": [], "draw": [], "away_win": [],
+        "over_2_5": [], "btts": [],
+    }
+
+    for _, row in ended.iterrows():
+        pred = predict_match(str(row["home_team_name"]), str(row["away_team_name"]))
+        hs, aw = int(row["home_score"]), int(row["away_score"])
+        markets["home_win"].append((pred.home_win_prob, 1 if hs > aw else 0))
+        markets["draw"].append((pred.draw_prob, 1 if hs == aw else 0))
+        markets["away_win"].append((pred.away_win_prob, 1 if hs < aw else 0))
+        markets["over_2_5"].append((pred.over_2_5_prob, 1 if (hs + aw) > 2 else 0))
+        markets["btts"].append((pred.btts_prob, 1 if (hs > 0 and aw > 0) else 0))
+
+    result = {"sample_size": len(ended), "markets": {}}
+
+    for market, preds_actuals in markets.items():
+        preds = np.array([p for p, a in preds_actuals])
+        actuals = np.array([a for p, a in preds_actuals])
+        brier = float(np.mean((preds - actuals) ** 2))
+
+        cal_bins = []
+        bin_idxs = np.digitize(preds, bins) - 1
+        for i in range(len(bins) - 1):
+            mask = bin_idxs == i
+            if mask.sum() >= 5:
+                cal_bins.append({
+                    "range": f"{bins[i]:.1f}-{bins[i+1]:.1f}",
+                    "count": int(mask.sum()),
+                    "avg_predicted": round(float(preds[mask].mean()), 3),
+                    "avg_actual": round(float(actuals[mask].mean()), 3),
+                })
+
+        result["markets"][market] = {
+            "brier_score": round(brier, 4),
+            "avg_predicted": round(float(preds.mean()), 3),
+            "avg_actual": round(float(actuals.mean()), 3),
+            "calibration_bins": cal_bins,
+        }
+
+    return result

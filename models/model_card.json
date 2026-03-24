@@ -1,0 +1,83 @@
+{
+  "model_name": "Poisson Match Predictor",
+  "version": "2.0.0",
+  "algorithm": "Dixon-Coles Poisson + xG blend + referee adjustment + in-play Bayesian",
+  "training_matches": 4495,
+  "date_range": {
+    "from": "2014-03-25",
+    "to": "2026-03-21"
+  },
+  "league": "England Premier League (BetsAPI ID: 94)",
+  "league_averages": {
+    "home_goals_per_match": 1.5433,
+    "away_goals_per_match": 1.2596,
+    "total_goals_per_match": 2.8029
+  },
+  "teams_trained": 35,
+  "team_list": [
+    "Arsenal",
+    "Aston Villa",
+    "Bournemouth",
+    "Brentford",
+    "Brighton",
+    "Burnley",
+    "Cardiff",
+    "Chelsea",
+    "Crystal Palace",
+    "Everton",
+    "Fulham",
+    "Huddersfield",
+    "Hull",
+    "Ipswich",
+    "Leeds",
+    "Leicester",
+    "Liverpool",
+    "Luton",
+    "Man City",
+    "Man Utd",
+    "Middlesbrough",
+    "Newcastle",
+    "Norwich",
+    "Nottm Forest",
+    "QPR",
+    "Sheff Utd",
+    "Southampton",
+    "Stoke",
+    "Sunderland",
+    "Swansea",
+    "Tottenham",
+    "Watford",
+    "West Brom",
+    "West Ham",
+    "Wolverhampton"
+  ],
+  "outputs": [
+    "lambda_home — expected home goals",
+    "lambda_away — expected away goals",
+    "home_win_prob — win probability (0-1)",
+    "draw_prob — draw probability (0-1)",
+    "away_win_prob — away win probability (0-1)",
+    "over_2_5_prob — probability of >2.5 total goals",
+    "btts_prob — both teams to score probability",
+    "most_likely_score — e.g. '1-1'",
+    "top_scores — top 5 scorelines with probabilities",
+    "score_matrix — 7x7 grid of P(home=i, away=j)"
+  ],
+  "improvements_v2": [
+    "P1: Dixon-Coles ρ=-0.05 correction (cross-validated on 1000 matches)",
+    "P2: Time-decay weighting in inline fallback (half-life 1 year)",
+    "P3: Separate home/away attack/defense strengths (serialized in PKL)",
+    "P4: xG-based strength adjustment (40% blend, 1291 matches 2022-2026)",
+    "P5: Referee goal factor adjustment (82.6% coverage, 3715 matches)",
+    "P6: In-play Bayesian update (conditional on current score + minute)",
+    "P7: Matrix normalization after Dixon-Coles correction",
+    "P8: Model calibration endpoint with Brier scores"
+  ],
+  "limitations": [
+    "Player absence / injuries not modeled",
+    "xG data only available for 2022-2026 matches (29% of dataset)",
+    "In-play model assumes constant scoring rate (no momentum adjustment)",
+    "No odds movement or market efficiency features yet"
+  ],
+  "pkl_path": "models/poisson_model.pkl"
+}

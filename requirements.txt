@@ -14,4 +14,6 @@ asyncpg==0.30.0
 psycopg2-binary==2.9.11
 sqlalchemy==2.0.41
 ibm-cos-sdk>=2.13
+google-auth>=2.29
+google-cloud-discoveryengine>=0.13
 certifi==2026.2.25

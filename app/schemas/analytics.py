@@ -73,3 +73,32 @@ class CardPatterns(BaseModel):
     total_reds: int
     buckets: list[CardPattern]
     peak_minute_range: str
+
+
+class HalfGoals(BaseModel):
+    first_half_avg: float
+    second_half_avg: float
+    first_half_pct: float
+
+
+class TeamProfile(BaseModel):
+    team_name: str
+    sample_size: int
+    avg_shots_on_target: float
+    avg_goals_scored: float
+    shot_efficiency: float          # goals per shot on target (0.0–1.0)
+    avg_xg: float                   # avg xG per game (if available)
+    goals_by_half: HalfGoals
+    home_win_rate: float
+    away_win_rate: float
+    home_goals_avg: float
+    away_goals_avg: float
+
+
+class RefereeStats(BaseModel):
+    referee_name: str
+    matches: int
+    avg_yellow_cards: float
+    avg_red_cards: float
+    avg_fouls: float
+    home_win_rate: float            # % of matches where home team won

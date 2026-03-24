@@ -1,6 +1,6 @@
 # Guia de Uso da API — Goat Tips Premier League AI
 
-> Versão 0.4.0 | Base URL: `https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud`
+> Versão 0.5.0 | Base URL: `https://goat-tips-backend-api.27s4ihbbhmjf.us-east.codeengine.appdomain.cloud`
 > Docs interativos: `.../docs`
 
 Este guia explica como consumir cada endpoint da Goat Tips API, com exemplos de requisição, resposta e casos de uso para o frontend.
@@ -245,9 +245,30 @@ curl $BASE/matches/toplist
 
 Previsão estatística por nome dos times. **Não requer partida ao vivo.**
 
+Aceita `?referee=` para ajuste de árbitro e `?stadium=`/`?city=` para ajuste climático via Open-Meteo:
+
 ```bash
+# Previsão básica
 curl "$BASE/predictions/?home=Arsenal&away=Chelsea"
+
+# Com árbitro + clima (kick-off às 15h UTC no Emirates)
+curl "$BASE/predictions/?home=Arsenal&away=Chelsea&referee=Michael+Oliver&stadium=Emirates+Stadium&match_hour_utc=15"
 ```
+
+**Query params:**
+| Param | Tipo | Descrição |
+|---|---|---|
+| `home` | string | Time mandante |
+| `away` | string | Time visitante |
+| `referee` | string | Árbitro (opcional) — ajuste ±8% em λ |
+| `stadium` | string | Nome do estádio (opcional) — ajuste climático via Open-Meteo |
+| `city` | string | Cidade (fallback quando estádio não encontrado) |
+| `match_hour_utc` | int 0–23 | Hora do kick-off em UTC para previsão climática horária |
+
+**Campos adicionais na resposta:**
+- `weather_factor` (float): multiplicador aplicado em λ (1.0 = sem impacto, 0.88 = chuva forte)
+- `weather_condition` (string): label climático ("clear", "rain", "storm", etc.)
+- `half_time` (object): previsão para o intervalo — ver seção abaixo
 
 **Resposta:**
 ```json
@@ -283,6 +304,86 @@ curl "$BASE/predictions/?home=Arsenal&away=Chelsea"
 - `score_matrix`: heatmap de probabilidades de placar (7×7)
 - `over_2_5_prob`: "mais de 2.5 gols: 54% de chance"
 - `btts_prob`: "ambos marcam: 57% de chance"
+
+---
+
+---
+
+### `GET /predictions/inplay`
+
+**Previsão Bayesiana in-play** — recalcula probabilidades de resultado final dado o estado atual da partida.
+
+```bash
+# Arsenal 1-0 Chelsea, minuto 70
+curl "$BASE/predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70"
+
+# Com árbitro
+curl "$BASE/predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70&referee=Michael+Oliver"
+```
+
+**Query params:**
+| Param | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `home` | string | Sim | Time mandante |
+| `away` | string | Sim | Time visitante |
+| `home_goals` | int (≥0) | Sim | Gols atuais do mandante |
+| `away_goals` | int (≥0) | Sim | Gols atuais do visitante |
+| `minute` | int (1–90) | Sim | Minuto atual do jogo |
+| `referee` | string | Não | Nome do árbitro para ajuste de λ |
+| `home_red` | int (0–2) | Não | Cartões vermelhos do mandante (reduz λ_ataque × 0.72^N) |
+| `away_red` | int (0–2) | Não | Cartões vermelhos do visitante (idem) |
+
+**Retorna o mesmo schema do `GET /predictions/`**, com `lambda_home`/`lambda_away` = **gols esperados no tempo restante**.
+
+**Como funciona (Non-Homogeneous Poisson):**
+1. Calcula λ pré-jogo (com xG, árbitro e clima)
+2. Usa **taxa empírica de gols por bucket de 15 min** (derivada de 9,448 gols PL) — não taxa constante
+3. Interpola linearmente dentro do bucket para sub-minuto preciso
+4. Aplica penalidade de cartão vermelho: `λ_ataque × 0.72^N` (time com N jogadores a menos)
+5. Distribui gols adicionais com Poisson(λ_rem), desloca pelo placar atual
+6. `model_note` detalha: minuto, placar, λ restante e fração de jogo usada
+
+**Exemplo de resposta (Arsenal 1-0 Chelsea, 70', Arsenal com 10 jogadores):**
+```bash
+curl "$BASE/predictions/inplay?home=Arsenal&away=Chelsea&home_goals=1&away_goals=0&minute=70&home_red=1"
+```
+```json
+{
+  "home_team": "Arsenal",
+  "away_team": "Chelsea",
+  "lambda_home": 0.375,
+  "lambda_away": 0.430,
+  "home_win_prob": 0.7147,
+  "draw_prob": 0.2022,
+  "away_win_prob": 0.0831,
+  "most_likely_score": "1-0",
+  "model_note": "In-play (Non-Homogeneous Poisson) — 70' (1-0) 🟥Arsenal(x1). λ restante: home=0.38, away=0.43 (28.2% do jogo). Base: 4495 jogos PL."
+}
+```
+
+**Evolução das probabilidades (Arsenal 1-0 Chelsea):**
+| Minuto | Home Win | Draw | Away Win |
+|--------|----------|------|----------|
+| Pré-jogo | 54.8% | 22.1% | 23.1% |
+| 30' | 77.7% | 15.8% | 6.5% |
+| 70' | 84.9% | 13.4% | 1.7% |
+| 85' | 94.7% | 5.2% | 0.2% |
+
+**Quando usar:** Widget "probabilidades ao vivo" no card de partida. Atualizar a cada ~30s sincronizado com o polling de placar.
+
+---
+
+### `GET /predictions/{event_id}/inplay`
+
+**In-play automático** — obtém placar e minuto diretamente da BetsAPI, sem precisar passar os valores manualmente.
+
+```bash
+curl $BASE/predictions/12345678/inplay
+```
+
+- Se a partida estiver **ao vivo**: usa `score_home`, `score_away`, `minute` e `referee` da BetsAPI
+- Se ainda **não iniciou**: retorna a previsão pré-jogo normal (fallback automático)
+- `model_note` indica qual modo foi usado
 
 ---
 
@@ -406,6 +507,67 @@ curl -X DELETE "$BASE/predictions/12345678/ask/history?session_id=550e8400-e29b-
 ```
 
 **Quando usar:** Botão "Limpar conversa" no frontend, ou ao iniciar uma nova análise da mesma partida.
+
+---
+
+### `POST /predictions/ask` e `POST /predictions/{event_id}/ask`
+
+Pergunta livre sobre a Premier League ou uma partida específica. Ambos usam o mesmo **pipeline multi-agente de 6 agentes LangGraph** (v0.6.0).
+
+```bash
+# Pergunta geral
+curl -X POST $BASE/predictions/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Qual árbitro aplica mais cartões amarelos esta temporada?"}'
+
+# Pergunta sobre partida específica
+curl -X POST "$BASE/predictions/12345678/ask?session_id=meu-uuid" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Qual é a forma recente do Arsenal e qual a chance de placar 2-0?"}'
+```
+
+**Pipeline de 6 agentes (substituiu loop de ferramentas em v0.6.0):**
+
+```
+intent_router (classifica intenção: FORM_ODDS | INJURIES | PLAYER | HISTORICAL | PREDICTION | ...)
+    ↓
+parallel_gather (3 sub-agentes em paralelo, timeout 1.8s cada):
+    ├── live_context    → BetsAPI: ao vivo, upcoming, odds
+    ├── historical_stats → CSV/Supabase: form, H2H, stats
+    └── player_intel    → Supabase FBref snapshots: attack_index, ausências
+    ↓
+quant_agent → Poisson: λ, probabilidades, placar mais provável
+    ↓
+narrative_verifier → LLM (Groq): sintetiza em Português com confidence_label
+```
+
+**Resiliência:** se qualquer sub-agente falhar (timeout 1.8s), `partial_context=True` na resposta — o restante dos dados ainda é entregue.
+
+**Resposta (campos novos em v0.6.0):**
+```json
+{
+  "match_id": "12345678",
+  "headline": "Arsenal favorito com força ofensiva superior",
+  "analysis": "...",
+  "prediction": "Placar mais provável: 2-0 Arsenal...",
+  "momentum_signal": "Arsenal pressiona",
+  "confidence_label": "Alta",
+  "confidence_score": 0.87,
+  "data_sources": ["live_context", "historical_stats", "player_intel", "quant"],
+  "partial_context": false,
+  "agent_trace_id": "a3f2e1d0-..."
+}
+```
+
+**Campos de observabilidade:**
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `confidence_score` | float 0–1 | Confiança agregada dos artefatos dos agentes |
+| `data_sources` | list[string] | Quais agentes contribuíram com dados |
+| `partial_context` | bool | `true` se algum agente falhou/timeout |
+| `agent_trace_id` | UUID string | ID para correlação em logs |
+
+**Suporta `?session_id=` em ambos os endpoints para histórico de conversa.**
 
 ![Fluxo — Histórico de Conversa](diagrams/assets/07-conversation-flow.svg)
 
@@ -569,6 +731,190 @@ curl "$BASE/analytics/risk-scores?minute=75&score_diff=-1"
 
 ---
 
+### `GET /analytics/referees`
+
+Lista todos os árbitros presentes no dataset histórico.
+
+```bash
+curl $BASE/analytics/referees
+```
+
+**Resposta:** `{"referees": ["Andre Marriner", "Anthony Taylor", "Michael Oliver", ...], "total": 22}`
+
+---
+
+### `GET /analytics/referees/{referee_name}/stats`
+
+Estatísticas históricas de um árbitro extraídas do dataset (2014–2026).
+
+```bash
+curl "$BASE/analytics/referees/Michael Oliver/stats"
+```
+
+**Resposta:**
+```json
+{
+  "referee_name": "Michael Oliver",
+  "matches": 279,
+  "avg_yellow_cards": 3.26,
+  "avg_red_cards": 0.13,
+  "avg_fouls": 19.59,
+  "home_win_rate": 0.441
+}
+```
+
+**Quando usar:** Para enriquecer análises pré-jogo com perfil de rigor do árbitro designado.
+
+---
+
+### `GET /analytics/teams/{team_name}/profile`
+
+Perfil avançado do time com eficiência ofensiva, distribuição de gols e desempenho por mando.
+
+```bash
+curl "$BASE/analytics/teams/Arsenal/profile"
+```
+
+**Resposta:**
+```json
+{
+  "team_name": "Arsenal",
+  "sample_size": 451,
+  "avg_shots_on_target": 5.09,
+  "avg_goals_scored": 1.88,
+  "shot_efficiency": 0.369,
+  "avg_xg": 1.78,
+  "goals_by_half": {
+    "first_half_avg": 1.52,
+    "second_half_avg": 1.98,
+    "first_half_pct": 0.434
+  },
+  "home_win_rate": 0.668,
+  "away_win_rate": 0.423,
+  "home_goals_avg": 2.11,
+  "away_goals_avg": 1.63
+}
+```
+
+**Campos:**
+- `shot_efficiency`: gols marcados por chute no alvo (Arsenal = 36.9%)
+- `avg_xg`: xG médio por jogo baseado nos dados históricos
+- `goals_by_half.first_half_pct`: proporção de gols marcados no 1T (Arsenal = 43.4% no 1T)
+- `home_win_rate` vs `away_win_rate`: contraste entre desempenho em casa e fora
+
+**Quando usar:** Para análises de tendência ofensiva, apostas em Over/Under por half, e enriquecer contexto do LLM.
+
+---
+
+### `GET /analytics/weather`
+
+**Condições climáticas em tempo real ou previstas** para estádios da Premier League.
+
+```bash
+# Clima atual no Emirates
+curl "$BASE/analytics/weather?stadium=Emirates+Stadium"
+
+# Previsão para kick-off às 15h UTC
+curl "$BASE/analytics/weather?stadium=Anfield&match_hour_utc=15"
+
+# Por cidade (fallback)
+curl "$BASE/analytics/weather?city=London&match_hour_utc=20"
+```
+
+**Query params:**
+| Param | Tipo | Descrição |
+|---|---|---|
+| `stadium` | string | Nome do estádio (33 estádios PL com coordenadas) |
+| `city` | string | Cidade fallback (25 cidades com coordenadas) |
+| `match_hour_utc` | int 0–23 | Hora do kick-off em UTC para previsão horária |
+
+**Resposta:**
+```json
+{
+  "stadium": "Emirates Stadium",
+  "city": null,
+  "weather_code": 61,
+  "condition": "rain",
+  "description": "Chuva",
+  "precipitation_mm": 2.4,
+  "wind_speed_kmh": 18.2,
+  "temperature_c": 11.3,
+  "goal_factor": 0.920,
+  "source": "stadium",
+  "impact": "leve"
+}
+```
+
+**Campos:**
+- `goal_factor`: multiplicador para λ (integrado automaticamente em `/predictions/` se `?stadium=` for passado)
+- `impact`: "neutro" (≥0.99), "leve" (≥0.94), "moderado" (≥0.87), "severo" (<0.87)
+- `source`: "stadium" (coordenada exata) ou "city" (coordenada de cidade)
+
+**Tabela de impacto climático:**
+| Condição | `goal_factor` | Redução de gols |
+|----------|--------------|-----------------|
+| Céu limpo / Nublado | 1.00 | 0% |
+| Garoa | 0.96 | -4% |
+| Chuva leve | 0.92 | -8% |
+| Chuva forte | 0.88–0.92 | -8% a -13% |
+| Neve | 0.88 | -12% |
+| Trovoada | 0.85 | -15% |
+| Vento > 40 km/h | -0.05 adicional | |
+
+**Fonte:** Open-Meteo API (gratuita, sem chave). Latência: ~200–500 ms.
+
+---
+
+### `GET /analytics/model/calibration?n=500`
+
+**Backtesting do modelo Poisson** — avalia a qualidade das probabilidades nos últimos N jogos encerrados.
+
+```bash
+curl "$BASE/analytics/model/calibration?n=500"
+```
+
+**Query params:**
+| Param | Tipo | Default | Descrição |
+|---|---|---|---|
+| `n` | int (50–4000) | 500 | Número de jogos recentes para backtest |
+
+**Como funciona:**
+1. Pega os últimos N jogos encerrados do dataset
+2. Para cada jogo, faz a previsão **sem usar esse jogo no treino** (leave-last-N-out)
+3. Compara a probabilidade prevista com o resultado real
+4. Calcula Brier Score por mercado e bins de calibração
+
+**Resposta:**
+```json
+{
+  "n_matches": 500,
+  "markets": {
+    "home_win":  { "brier_score": 0.2161, "avg_predicted": 0.452, "avg_actual": 0.460 },
+    "draw":      { "brier_score": 0.1886, "avg_predicted": 0.248, "avg_actual": 0.241 },
+    "away_win":  { "brier_score": 0.2003, "avg_predicted": 0.300, "avg_actual": 0.299 },
+    "over_2_5":  { "brier_score": 0.2387, "avg_predicted": 0.537, "avg_actual": 0.528 },
+    "btts":      { "brier_score": 0.2431, "avg_predicted": 0.523, "avg_actual": 0.510 }
+  },
+  "calibration_bins": {
+    "home_win": [
+      { "bin": "0.0-0.1", "avg_predicted": 0.07, "avg_actual": 0.06, "n": 12 },
+      { "bin": "0.4-0.5", "avg_predicted": 0.45, "avg_actual": 0.47, "n": 89 }
+    ]
+  }
+}
+```
+
+**Interpretando o Brier Score:**
+- `0.0` = perfeito (impossível na prática)
+- `0.25` = modelo sem poder discriminativo (equivale a prever 50% sempre)
+- `< 0.22` = bom modelo preditivo ← **nossos resultados estão nessa faixa**
+
+**Quando usar:** Dashboard interno de monitoramento do modelo, validação após retreinamento.
+
+**Nota:** Primeira chamada leva ~10s (cálculo não cacheado por padrão). Para produção, considere cache de 24h.
+
+---
+
 ## Polling — Como Atualizar o Frontend
 
 | Dado | Endpoint | Intervalo recomendado |
@@ -578,7 +924,12 @@ curl "$BASE/analytics/risk-scores?minute=75&score_diff=-1"
 | Momentum | `GET /matches/{id}/stats-trend` | 2 min |
 | Próximos jogos | `GET /matches/upcoming` | 5 min |
 | Risk scores | `GET /analytics/risk-scores` | Calculado localmente com o minuto atual |
+| Perfil do árbitro | `GET /analytics/referees/{name}/stats` | Uma vez antes do jogo |
+| Perfil do time | `GET /analytics/teams/{name}/profile` | Uma vez por sessão |
+| Probabilidades in-play | `GET /predictions/{id}/inplay` | 30 s (sincronizar com polling de placar; passar `?home_red=N` se houver cartão vermelho) |
+| Clima do estádio | `GET /analytics/weather?stadium=X` | Uma vez por dia (ou na abertura do card da partida) |
 | Narrativa completa | `GET /predictions/{id}/full-analysis` | Sob demanda (botão) |
+| Calibração do modelo | `GET /analytics/model/calibration` | Uma vez por semana / após retrain |
 
 > **Dica:** O `full-analysis` não deve ser chamado no polling — é caro (LLM). Acione sob demanda ou uma vez por jogo.
 
@@ -617,6 +968,15 @@ Obtém do full-analysis:
 
 Ou calcula dinamicamente:
   GET /analytics/risk-scores?minute={minuto_atual}&score_diff={h-a}
+```
+
+### Widget: "Probabilidades ao Vivo"
+
+```
+1. GET /predictions/{id}/inplay               → probabilidades atualizadas pelo placar
+2. Exibir barra home_win / draw / away_win    → atualiza a cada 30s com o polling de placar
+3. Exibir model_note para contexto (ex: "In-play Bayesian — 70' (1-0)")
+4. Fallback: se jogo ainda não iniciou, exibir previsão pré-jogo normal
 ```
 
 ### Widget: "Chat da Partida"
@@ -668,6 +1028,29 @@ Os endpoints `/matches/live` e `/matches/upcoming` nunca retornam 5xx por timeou
 | `form_string` | string | Sequência de resultados ex: `"WWDLW"` |
 | `agent_steps` | string[] | Nós do grafo LangGraph executados |
 | `session_id` | string (UUID) | ID de sessão para histórico de chat — gerado pelo frontend |
+| `shot_efficiency` | float 0–1 | Gols por chute no alvo do time |
+| `avg_xg` | float | xG médio por jogo do time |
+| `first_half_pct` | float 0–1 | Proporção de gols marcados no 1º tempo |
+| `avg_yellow_cards` | float | Média de cartões amarelos/jogo do árbitro |
+| `home_win_rate` (árbitro) | float 0–1 | Taxa de vitória do mandante com este árbitro |
+| `referee` | string (query param) | Nome do árbitro para ajuste de λ (±8% baseado em 3,715 jogos) |
+| `home_goals` / `away_goals` | int | Gols atuais para previsão in-play |
+| `minute` | int 1–90 | Minuto atual do jogo para previsão in-play |
+| `home_red` / `away_red` | int 0–2 | Cartões vermelhos — reduz λ_ataque × 0.72^N por jogador a menos |
+| `brier_score` | float 0–0.25 | Erro quadrático médio (menor = melhor, <0.22 = modelo bom) |
+| `lambda_home` (in-play) | float | Gols esperados do mandante **no tempo restante** (não no jogo inteiro) |
+| `weather_factor` | float 0.75–1.0 | Multiplicador climático em λ (1.0 = neutro, 0.85 = trovoada) |
+| `weather_condition` | string | Label climático: "clear", "cloudy", "drizzle", "rain", "snow", "storm" |
+| `half_time` | object | Previsão para o intervalo: `home_win_prob`, `draw_prob`, `away_win_prob`, `over_0_5_prob`, `over_1_5_prob`, `most_likely_score`, `lambda_home`, `lambda_away` |
+| `confidence_score` | float 0–1 | Confiança agregada do pipeline multi-agente |
+| `data_sources` | list[string] | Agentes que contribuíram: `live_context`, `historical_stats`, `player_intel`, `quant` |
+| `partial_context` | bool | `true` se algum agente do pipeline falhou ou sofreu timeout |
+| `agent_trace_id` | UUID | ID único para correlação em logs do pipeline ask |
+| `attack_index` | float | FBref: `(Gls+xG)` ponderado por 90s jogados — poder ofensivo do elenco |
+| `creation_index` | float | FBref: `(Ast+xAG+KP+PrgP)` ponderado — criatividade e progressão |
+| `defensive_index` | float | FBref: `(Tkl+Int+Blocks+Clr)` ponderado — solidez defensiva |
+| `squad_depth` | int | Número de jogadores com ≥5 90s jogados no elenco |
+| `impact_score` | float 0–10 | Score de impacto de ausência de jogador: `(Gls + Ast + 90s×0.1) / max_do_time × 10` |
 
 ---
 
