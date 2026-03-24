@@ -33,6 +33,7 @@ class Config(BaseSettings):
 
     # Telegram Bot
     TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
+    TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "@goat_tips_32")
 
     # Misc
     KAGGLE_API_KEY: str = os.getenv("KAGGLE_API_KEY", "")

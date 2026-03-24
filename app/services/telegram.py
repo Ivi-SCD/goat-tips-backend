@@ -2,11 +2,14 @@
 Telegram Service
 ================
 Cliente para interagir com a Telegram Bot API via httpx.
-Responsável por enviar mensagens e configurar o webhook.
+Responsável por enviar mensagens, configurar o webhook e publicar narrativas no canal.
 """
 
+import logging
 import httpx
 from app.core.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 
@@ -57,3 +60,45 @@ async def get_webhook_info() -> dict:
         resp = await client.get(_url("getWebhookInfo"))
         resp.raise_for_status()
         return resp.json()
+
+
+def _format_narrative(home: str, away: str, headline: str, analysis: str, prediction: str, momentum_signal: str | None, confidence_label: str) -> str:
+    """Formata uma narrativa para publicação no canal."""
+    lines = [
+        f"⚽ <b>{home} x {away}</b>",
+        "",
+        f"<b>{headline}</b>",
+        "",
+        analysis,
+        "",
+        f"📊 <b>Previsão:</b> {prediction}",
+    ]
+    if momentum_signal:
+        lines += ["", f"📈 <b>Momentum:</b> {momentum_signal}"]
+    lines += ["", f"🎯 Confiança: <i>{confidence_label}</i>"]
+    return "\n".join(lines)
+
+
+async def publish_narrative_to_channel(
+    home: str,
+    away: str,
+    headline: str,
+    analysis: str,
+    prediction: str,
+    confidence_label: str,
+    momentum_signal: str | None = None,
+) -> None:
+    """
+    Publica uma narrativa de partida no canal @goat_tips_32.
+    Falha silenciosamente para não impactar o endpoint principal.
+    """
+    channel = get_settings().TELEGRAM_CHANNEL_ID
+    if not get_settings().TELEGRAM_TOKEN or not channel:
+        return
+
+    text = _format_narrative(home, away, headline, analysis, prediction, momentum_signal, confidence_label)
+
+    try:
+        await send_message(channel, text)
+    except Exception as exc:
+        logger.warning("Falha ao publicar narrativa no canal Telegram: %s", exc)
