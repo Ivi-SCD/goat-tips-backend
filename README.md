@@ -482,6 +482,10 @@ O endpoint `/predictions/{id}/ask` suporta histórico de conversa por sessão, a
 **Por que 6 pares?**
 Típico de uma sessão de análise de partida (< 10 perguntas). A janela deslizante descarta pares mais antigos silenciosamente — sem sumarização necessária para esse volume.
 
+![Fluxo — Histórico de Conversa](docs/diagrams/assets/07-conversation-flow.svg)
+
+![Sequência — Pergunta com Histórico](docs/diagrams/assets/11-sequence-ask-question.svg)
+
 ---
 
 ## Diagramas de Arquitetura
@@ -492,10 +496,6 @@ Os diagramas estão em `docs/` e podem ser abertos no [draw.io](https://app.diag
 |---|---|
 | `docs/architecture-general.drawio` | Visão geral: IBM Cloud, BetsAPI, Groq, Vertex AI Search, Supabase |
 | `docs/architecture-ml-agents.drawio` | Fluxo detalhado: Poisson+DC, LangGraph, Tool-Calling Loop, Retrain |
-
-![Fluxo — Histórico de Conversa](docs/diagrams/assets/07-conversation-flow.svg)
-
-![Sequência — Pergunta com Histórico](docs/diagrams/assets/11-sequence-ask-question.svg)
 
 ---
 
@@ -640,12 +640,14 @@ python scripts/train_model.py
 | GET | `/analytics/goal-patterns` | Distribuição de gols por minuto (9,508 gols) |
 | GET | `/analytics/card-patterns` | Distribuição de cartões por minuto (11,391 cartões) |
 | GET | `/analytics/risk-scores` | Risk scores ao vivo (gol + cartão) |
-
-![Casos de Uso — Jobs](docs/diagrams/assets/19-use-cases-jobs.svg)
 | GET | `/analytics/referees` | Lista todos os árbitros do dataset |
 | GET | `/analytics/referees/{name}/stats` | Estatísticas do árbitro: cartões/jogo, faltas, home win rate |
 | GET | `/analytics/model/calibration?n=500` | **Backtesting do modelo** com Brier scores em N jogos recentes |
 | GET | `/analytics/weather?stadium=X&city=Y&match_hour_utc=N` | **Clima em tempo real** para estádio — retorna `goal_factor` |
+
+### CE Jobs — Automação
+
+![Casos de Uso — Jobs](docs/diagrams/assets/19-use-cases-jobs.svg)
 
 ---
 
