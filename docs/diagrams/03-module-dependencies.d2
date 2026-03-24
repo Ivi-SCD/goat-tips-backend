@@ -1,0 +1,263 @@
+title: Goat Tips — Dependências entre Módulos {
+  near: top-center
+  style.font-size: 24
+  style.bold: true
+}
+
+direction: down
+
+# ─────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────
+main: app/main.py\nFastAPI {
+  icon: https://cdn.simpleicons.org/fastapi/009485
+  style.fill: "#E0FFF8"
+  style.stroke: "#009485"
+  style.stroke-width: 3
+  style.border-radius: 8
+  style.font-size: 14
+  style.bold: true
+}
+
+# ─────────────────────────────────────────────
+# ROUTERS
+# ─────────────────────────────────────────────
+routers: Routers — HTTP Layer {
+  style.fill: "#EFF6FF"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  r_matches: routers/matches.py {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+  }
+  r_predictions: routers/predictions.py {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+  }
+  r_analytics: routers/analytics.py {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 6
+  }
+}
+
+# ─────────────────────────────────────────────
+# AGENTS
+# ─────────────────────────────────────────────
+agents: Agents — Orquestração {
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  match_agent: agents/match_agent.py\nLangGraph Graph {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+  }
+  nodes: agents/nodes.py\nAgentState + 3 Nós {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+  }
+  match_agent -> nodes
+}
+
+# ─────────────────────────────────────────────
+# SERVICES
+# ─────────────────────────────────────────────
+services: Services — Business Logic {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  betsapi: services/betsapi.py\nCliente BetsAPI async {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+  }
+  predictor: services/predictor.py\nModelo Poisson + fallback {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+  }
+  narrative: services/narrative.py\nGeração de narrativa {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+  }
+  llm_client: services/llm_client.py\nGroq singleton {
+    style.fill: "#F5F3FF"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+  }
+  analytics_svc: services/analytics.py\nHistórico + risk scores {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+  }
+  conversation: services/conversation.py\nHistórico de chat {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 6
+  }
+  narrative -> llm_client
+}
+
+# ─────────────────────────────────────────────
+# REPOSITORIES
+# ─────────────────────────────────────────────
+repos: Repositories — Acesso a Dados {
+  style.fill: "#FFF7ED"
+  style.stroke: "#EA580C"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  historical: repositories/historical.py\nCSVs → pandas (lru_cache) {
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.border-radius: 6
+  }
+  database: repositories/database.py\nSupabase upsert bulk {
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.border-radius: 6
+  }
+}
+
+# ─────────────────────────────────────────────
+# DATABASE / INFRA
+# ─────────────────────────────────────────────
+db: DB & Core {
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+  style.border-radius: 10
+
+  connection: db/connection.py\nasyncpg pool {
+    shape: cylinder
+    style.fill: "#FEF08A"
+    style.stroke: "#CA8A04"
+    style.border-radius: 6
+  }
+  models: db/models.py\nSQLAlchemy ORM {
+    style.fill: "#FEF08A"
+    style.stroke: "#CA8A04"
+    style.border-radius: 6
+  }
+  settings: core/settings.py\nPydantic Settings {
+    style.fill: "#FEF08A"
+    style.stroke: "#CA8A04"
+    style.border-radius: 6
+  }
+}
+
+# ─────────────────────────────────────────────
+# SCHEMAS
+# ─────────────────────────────────────────────
+schemas: schemas/ — Contratos Pydantic {
+  style.fill: "#F8FAFC"
+  style.stroke: "#94A3B8"
+  style.stroke-width: 2
+  style.border-radius: 10
+  style.font-size: 13
+
+  s_match: schemas/match.py {
+    style.fill: "#F1F5F9"
+    style.stroke: "#94A3B8"
+    style.border-radius: 6
+  }
+  s_prediction: schemas/prediction.py {
+    style.fill: "#F1F5F9"
+    style.stroke: "#94A3B8"
+    style.border-radius: 6
+  }
+  s_analytics: schemas/analytics.py {
+    style.fill: "#F1F5F9"
+    style.stroke: "#94A3B8"
+    style.border-radius: 6
+  }
+  s_agent: schemas/agent.py {
+    style.fill: "#F1F5F9"
+    style.stroke: "#94A3B8"
+    style.border-radius: 6
+  }
+}
+
+# ─────────────────────────────────────────────
+# EXTERNAL
+# ─────────────────────────────────────────────
+ext_betsapi: BetsAPI {
+  shape: cloud
+  style.fill: "#FFFBEB"
+  style.stroke: "#D97706"
+}
+ext_groq: Groq {
+  shape: cloud
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+}
+ext_supabase: Supabase {
+  shape: cylinder
+  icon: https://cdn.simpleicons.org/supabase/3ECF8E
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+}
+ext_cos: IBM COS {
+  shape: stored_data
+  icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Data%20%26%20Storage/Object%20Bucket.svg
+  style.fill: "#EEF2FF"
+  style.stroke: "#4F46E5"
+}
+ext_csv: CSVs locais\n(premier_league_*.csv) {
+  shape: document
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+}
+
+# ─────────────────────────────────────────────
+# CONEXÕES PRINCIPAIS
+# ─────────────────────────────────────────────
+main -> routers.r_matches
+main -> routers.r_predictions
+main -> routers.r_analytics
+
+routers.r_matches -> services.betsapi
+routers.r_predictions -> services.betsapi
+routers.r_predictions -> services.predictor
+routers.r_predictions -> services.narrative
+routers.r_predictions -> services.conversation
+routers.r_predictions -> agents.match_agent
+routers.r_analytics -> services.analytics_svc
+
+agents.nodes -> services.betsapi
+agents.nodes -> services.predictor
+agents.nodes -> services.narrative
+agents.nodes -> services.analytics_svc
+
+services.analytics_svc -> repos.historical
+services.conversation -> repos.database
+services.predictor -> ext_cos: boto3 {
+  style.stroke-dash: 5
+}
+
+repos.historical -> ext_csv: pandas read_csv {
+  style.stroke: "#CA8A04"
+  style.stroke-dash: 3
+}
+repos.database -> db.connection
+db.connection -> ext_supabase: asyncpg {
+  style.stroke: "#16A34A"
+}
+
+services.betsapi -> ext_betsapi: httpx {
+  style.stroke: "#D97706"
+}
+services.llm_client -> ext_groq: OpenAI SDK {
+  style.stroke: "#7C3AED"
+}

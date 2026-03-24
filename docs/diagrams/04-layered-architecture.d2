@@ -1,0 +1,223 @@
+title: Goat Tips — Arquitetura em Camadas {
+  near: top-center
+  style.font-size: 24
+  style.bold: true
+}
+
+direction: down
+
+# ─────────────────────────────────────────────
+# CAMADA 1 — HTTP
+# ─────────────────────────────────────────────
+layer1: Camada HTTP — Routers {
+  style.fill: "#EFF6FF"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 3
+  style.border-radius: 12
+
+  matches_r: routers/matches.py {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 8
+    matches_label: "GET /live · /upcoming · /{id}\n/h2h · /stats-trend · /lineup · /toplist" {
+      shape: text
+      style.font-size: 12
+      style.font-color: "#1D4ED8"
+    }
+  }
+
+  predictions_r: routers/predictions.py {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 8
+    pred_label: "GET / · /{id} · /{id}/full-analysis\nPOST /{id}/narrative · /{id}/ask\nDELETE /{id}/ask/history" {
+      shape: text
+      style.font-size: 12
+      style.font-color: "#1D4ED8"
+    }
+  }
+
+  analytics_r: routers/analytics.py {
+    style.fill: "#DBEAFE"
+    style.stroke: "#3B82F6"
+    style.border-radius: 8
+    an_label: GET /teams · /form · /stats · /h2h\n/goal-patterns · /card-patterns · /risk-scores {
+      shape: text
+      style.font-size: 12
+      style.font-color: "#1D4ED8"
+    }
+  }
+}
+
+# ─────────────────────────────────────────────
+# CAMADA 2 — AGENTES
+# ─────────────────────────────────────────────
+layer2: Camada de Agentes — Orquestração LangGraph {
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 3
+  style.border-radius: 12
+
+  graph: match_agent.py — LangGraph Graph {
+    style.fill: "#EDE9FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 8
+  }
+
+  n1: fetch_context_node\nasyncio.gather → BetsAPI x4 {
+    style.fill: "#DDD6FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+  }
+
+  n2: fetch_historical_node\npandas + Poisson + risk scores {
+    style.fill: "#DDD6FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+  }
+
+  n3: generate_narrative_node\nGroq LLM — PT-BR {
+    style.fill: "#DDD6FE"
+    style.stroke: "#7C3AED"
+    style.border-radius: 6
+  }
+
+  graph -> n1 -> n2 -> n3
+}
+
+# ─────────────────────────────────────────────
+# CAMADA 3 — SERVIÇOS
+# ─────────────────────────────────────────────
+layer3: Camada de Serviços — Business Logic {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 3
+  style.border-radius: 12
+
+  s_betsapi: services/betsapi.py\nCliente async · odds · momentum {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 8
+  }
+
+  s_predictor: services/predictor.py\nDixon-Coles · λ_home · λ_away · matriz 7×7 {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 8
+  }
+
+  s_narrative: services/narrative.py\nContext builder · enriched prompt {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 8
+  }
+
+  s_llm: services/llm_client.py\nGroq singleton · SYSTEM_PROMPT {
+    style.fill: "#F5F3FF"
+    style.stroke: "#7C3AED"
+    style.border-radius: 8
+  }
+
+  s_analytics: services/analytics.py\nform · h2h · goal/card risk {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 8
+  }
+
+  s_conv: services/conversation.py\nsessão JSONB · 6 pares max {
+    style.fill: "#DCFCE7"
+    style.stroke: "#16A34A"
+    style.border-radius: 8
+  }
+
+  s_narrative -> s_llm
+}
+
+# ─────────────────────────────────────────────
+# CAMADA 4 — REPOSITÓRIOS
+# ─────────────────────────────────────────────
+layer4: Camada de Repositórios — Acesso a Dados {
+  style.fill: "#FFF7ED"
+  style.stroke: "#EA580C"
+  style.stroke-width: 3
+  style.border-radius: 12
+
+  r_historical: repositories/historical.py\nCSVs → pandas DataFrames (in-memory, lru_cache) {
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.border-radius: 8
+  }
+
+  r_database: repositories/database.py\nSupabase upsert bulk (asyncpg) {
+    style.fill: "#FED7AA"
+    style.stroke: "#EA580C"
+    style.border-radius: 8
+  }
+}
+
+# ─────────────────────────────────────────────
+# CAMADA 5 — INFRAESTRUTURA
+# ─────────────────────────────────────────────
+layer5: Camada de Infraestrutura {
+  style.fill: "#F8FAFC"
+  style.stroke: "#64748B"
+  style.stroke-width: 3
+  style.border-radius: 12
+
+  i_csv: CSVs locais\n4585 jogos · 86K stats · 229K timeline {
+    shape: document
+    style.fill: "#FEF9C3"
+    style.stroke: "#CA8A04"
+    style.border-radius: 6
+  }
+
+  i_supabase: Supabase PostgreSQL\n7 tabelas + 2 views {
+    shape: cylinder
+    icon: https://cdn.simpleicons.org/supabase/3ECF8E
+    style.fill: "#F0FDF4"
+    style.stroke: "#16A34A"
+  }
+
+  i_betsapi: BetsAPI\nREST API externa {
+    shape: cloud
+    style.fill: "#FFFBEB"
+    style.stroke: "#D97706"
+  }
+
+  i_groq: Groq Cloud\nLLM Inference {
+    shape: cloud
+    style.fill: "#F5F3FF"
+    style.stroke: "#7C3AED"
+  }
+
+  i_cos: IBM COS\npoisson_model.pkl {
+    shape: stored_data
+    icon: https://raw.githubusercontent.com/IBM-Cloud/architecture-icons/main/svg/Data%20%26%20Storage/Object%20Bucket.svg
+    style.fill: "#EEF2FF"
+    style.stroke: "#4F46E5"
+  }
+}
+
+# ─────────────────────────────────────────────
+# FLUXO ENTRE CAMADAS
+# ─────────────────────────────────────────────
+layer1 -> layer2: full-analysis {
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+}
+layer1 -> layer3: demais endpoints {
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+layer2 -> layer3 {
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+}
+layer3 -> layer4 {
+  style.stroke: "#EA580C"
+  style.stroke-width: 2
+}
+layer4 -> layer5 {
+  style.stroke: "#64748B"
+  style.stroke-width: 2
+}

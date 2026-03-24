@@ -1,0 +1,72 @@
+title: Goat Tips — Sequência: Full Analysis {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+shape: sequence_diagram
+
+# ─────────────────────────────────────────────
+# PARTICIPANTES
+# ─────────────────────────────────────────────
+client: Cliente {
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+}
+api: FastAPI\n/predictions {
+  style.fill: "#E0FFF8"
+  style.stroke: "#009485"
+}
+agent: LangGraph\nGraph {
+  style.fill: "#EDE9FE"
+  style.stroke: "#7C3AED"
+}
+betsapi: BetsAPI {
+  style.fill: "#FFFBEB"
+  style.stroke: "#D97706"
+}
+analytics: AnalyticsService\n+ Repositories {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+}
+predictor: PoissonPredictor {
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+}
+groq: Groq LLM {
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+}
+supabase: Supabase {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+}
+
+# ─────────────────────────────────────────────
+# FLUXO
+# ─────────────────────────────────────────────
+client -> api: "GET /predictions/{event_id}/full-analysis"
+
+api -> agent: run_full_analysis(event_id)
+
+agent -> agent: Inicializa AgentState
+
+# Nó 1
+agent -> betsapi: "asyncio.gather [\nget_match_by_id,\nget_h2h,\nget_stats_trend,\nget_lineup\n]"
+betsapi -> agent: MatchContext, H2HRecord,\nStatsTrend, LineupInfo
+
+# Nó 2
+agent -> analytics: "asyncio.to_thread [\nget_team_form(home),\nget_team_form(away),\ncalculate_goal_risk,\ncalculate_card_risk\n]"
+analytics -> agent: TeamForm ×2,\ngoal_risk_score, card_risk_score
+
+agent -> predictor: predict_from_match_context(match)
+predictor -> predictor: get_model() — pkl / COS / inline
+predictor -> agent: ScorePredictionResponse\n(λ, score_matrix, probs)
+
+# Nó 3
+agent -> groq: generate_narrative_enriched(\n  match, h2h, form, stats_trend,\n  prediction, risk_scores\n)
+groq -> agent: "NarrativeResponse\n{ headline, analysis, prediction,\n  momentum_signal, confidence_label }"
+
+agent -> api: AgentState final
+
+api -> client: 200 OK — FullMatchAnalysis\n(~5–15 s)

@@ -1,0 +1,199 @@
+title: Goat Tips — Schemas: Domínio Match {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+direction: right
+
+# ─────────────────────────────────────────────
+# ENTIDADES CENTRAIS
+# ─────────────────────────────────────────────
+TeamInfo: TeamInfo {
+  shape: class
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+  style.stroke-width: 2
+
+  id: str
+  name: str
+  image_url: "Optional[str]"
+}
+
+OddsSnapshot: OddsSnapshot {
+  shape: class
+  style.fill: "#FEF3C7"
+  style.stroke: "#D97706"
+  style.stroke-width: 2
+
+  home_win: float
+  draw: float
+  away_win: float
+  over_2_5: "Optional[float]"
+  btts: "Optional[float]"
+}
+
+ImpliedProbabilities: ImpliedProbabilities {
+  shape: class
+  style.fill: "#FEF3C7"
+  style.stroke: "#D97706"
+  style.stroke-width: 2
+
+  home_win: float
+  draw: float
+  away_win: float
+  market_margin: float
+}
+
+MatchContext: MatchContext {
+  shape: class
+  style.fill: "#EDE9FE"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 3
+
+  event_id: str
+  home: TeamInfo
+  away: TeamInfo
+  minute: "Optional[str]"
+  score_home: int
+  score_away: int
+  status: str
+  odds: "Optional[OddsSnapshot]"
+  probabilities: "Optional[ImpliedProbabilities]"
+  odds_shift_pct: "Optional[float]"
+  kick_off_time: "Optional[str]"
+  round: "Optional[str]"
+  referee: "Optional[str]"
+  stadium: "Optional[str]"
+  bet365_id: "Optional[str]"
+}
+
+NarrativeResponse: NarrativeResponse {
+  shape: class
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+
+  match_id: str
+  headline: str
+  analysis: str
+  prediction: str
+  momentum_signal: "Optional[str]"
+  confidence_label: str
+}
+
+# ─────────────────────────────────────────────
+# STATS TREND
+# ─────────────────────────────────────────────
+PeriodStats: PeriodStats {
+  shape: class
+  style.fill: "#DCFCE7"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+
+  period: str
+  home_shots: int
+  away_shots: int
+  home_shots_on_target: int
+  away_shots_on_target: int
+  home_corners: int
+  away_corners: int
+  home_possession: float
+  away_possession: float
+  home_dangerous_attacks: int
+  away_dangerous_attacks: int
+  home_attacks: int
+  away_attacks: int
+}
+
+StatsTrend: StatsTrend {
+  shape: class
+  style.fill: "#DCFCE7"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+
+  event_id: str
+  periods: "list[PeriodStats]"
+  momentum_score: "Optional[float]"
+  momentum_label: "Optional[str]"
+}
+
+# ─────────────────────────────────────────────
+# LINEUP
+# ─────────────────────────────────────────────
+PlayerInfo: PlayerInfo {
+  shape: class
+  style.fill: "#A7F3D0"
+  style.stroke: "#059669"
+  style.stroke-width: 2
+
+  id: "Optional[str]"
+  name: str
+  number: "Optional[str]"
+  position: "Optional[str]"
+}
+
+LineupTeam: LineupTeam {
+  shape: class
+  style.fill: "#DCFCE7"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+
+  team: TeamInfo
+  formation: "Optional[str]"
+  starting_xi: "list[PlayerInfo]"
+  substitutes: "list[PlayerInfo]"
+}
+
+LineupInfo: LineupInfo {
+  shape: class
+  style.fill: "#DCFCE7"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+
+  event_id: str
+  home: "Optional[LineupTeam]"
+  away: "Optional[LineupTeam]"
+}
+
+# ─────────────────────────────────────────────
+# TOPLIST
+# ─────────────────────────────────────────────
+TopPlayer: TopPlayer {
+  shape: class
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+
+  rank: int
+  player_name: str
+  team_name: str
+  goals: "Optional[int]"
+  assists: "Optional[int]"
+}
+
+LeagueToplist: LeagueToplist {
+  shape: class
+  style.fill: "#FEF3C7"
+  style.stroke: "#D97706"
+  style.stroke-width: 2
+
+  league_id: str
+  top_scorers: "list[TopPlayer]"
+  top_assists: "list[TopPlayer]"
+}
+
+# ─────────────────────────────────────────────
+# RELACIONAMENTOS
+# ─────────────────────────────────────────────
+MatchContext -> TeamInfo: home, away
+MatchContext -> OddsSnapshot: odds
+MatchContext -> ImpliedProbabilities: probabilities
+
+StatsTrend -> PeriodStats: periods (1..*)
+
+LineupInfo -> LineupTeam: home, away
+LineupTeam -> TeamInfo: team
+LineupTeam -> PlayerInfo: starting_xi, substitutes (1..*)
+
+LeagueToplist -> TopPlayer: top_scorers, top_assists (1..*)

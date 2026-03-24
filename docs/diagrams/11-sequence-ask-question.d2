@@ -1,0 +1,58 @@
+title: Goat Tips — Sequência: Pergunta com Histórico (/ask) {
+  near: top-center
+  style.font-size: 22
+  style.bold: true
+}
+
+shape: sequence_diagram
+
+client: Cliente {
+  style.fill: "#DBEAFE"
+  style.stroke: "#3B82F6"
+}
+api: FastAPI\n/predictions {
+  style.fill: "#E0FFF8"
+  style.stroke: "#009485"
+}
+conv: ConversationService {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+}
+supabase: Supabase\nconversation_sessions {
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+}
+narrative: NarrativeService {
+  style.fill: "#FFF7ED"
+  style.stroke: "#EA580C"
+}
+groq: Groq LLM {
+  style.fill: "#F5F3FF"
+  style.stroke: "#7C3AED"
+}
+
+# ─── 1. PERGUNTA ─────────────────────────────
+client -> api: "POST /predictions/{id}/ask\n{ question } ?session_id=<uuid>"
+
+api -> conv: load_history(session_id, event_id)
+conv -> supabase: SELECT messages\nWHERE session_id=? AND event_id=?
+supabase -> conv: messages JSONB\n(ou vazio — 1º turno)
+conv -> api: últimos 6 pares\n(12 mensagens)
+
+api -> narrative: answer_question(\n  match, question, history\n)
+narrative -> groq: "chat.completions.create(\n  messages=[\n    system_prompt,\n    …history,\n    {role: user, content: question}\n  ]\n)"
+groq -> narrative: NarrativeResponse (JSON)
+narrative -> api: NarrativeResponse
+
+api -> conv: save_turn(\n  session_id, event_id,\n  question, headline, analysis\n)
+conv -> supabase: UPSERT messages\n|| novo par user/assistant\n(mantém max 6 pares)
+supabase -> conv: OK
+
+api -> client: 200 OK — NarrativeResponse
+
+# ─── 2. LIMPAR HISTÓRICO ─────────────────────
+client -> api: "DELETE /predictions/{id}/ask/history\n?session_id=<uuid>"
+api -> conv: clear_session(session_id, event_id)
+conv -> supabase: DELETE FROM conversation_sessions\nWHERE session_id=? AND event_id=?
+supabase -> conv: OK
+api -> client: 204 No Content
