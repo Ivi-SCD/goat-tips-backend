@@ -149,6 +149,51 @@ def _build_match(event: dict, status: str) -> MatchContext:
     )
 
 
+def _poisson_fallback(match: MatchContext) -> None:
+    """Fallback: compute probabilities from Poisson model when odds are unavailable."""
+    try:
+        from app.services.predictor import predict_match
+        pred = predict_match(match.home.name, match.away.name)
+        match.probabilities = ImpliedProbabilities(
+            home_win=pred.home_win_prob,
+            draw=pred.draw_prob,
+            away_win=pred.away_win_prob,
+            market_margin=0.0,  # no bookmaker margin — model-based
+        )
+        logger.info("Poisson fallback for %s vs %s: H=%.2f D=%.2f A=%.2f",
+                     match.home.name, match.away.name,
+                     pred.home_win_prob, pred.draw_prob, pred.away_win_prob)
+    except Exception as exc:
+        logger.warning("Poisson fallback failed for event_id=%s: %s", match.event_id, exc)
+
+
+async def _attach_odds_and_probabilities(matches: list[MatchContext]) -> None:
+    """Fetch odds in parallel; fallback to Poisson predictor when odds are unavailable."""
+    if not matches:
+        return
+
+    odds_results = await asyncio.gather(
+        *[_fetch_odds(m.event_id) for m in matches],
+        return_exceptions=True,
+    )
+
+    poisson_needed: list[MatchContext] = []
+    for match, odds in zip(matches, odds_results):
+        if isinstance(odds, OddsSnapshot):
+            match.odds = odds
+            match.probabilities = _remove_bookmaker_margin(
+                odds.home_win, odds.draw, odds.away_win
+            )
+        else:
+            poisson_needed.append(match)
+
+    # Fallback to Poisson model for matches without odds (run in parallel threads)
+    if poisson_needed:
+        await asyncio.gather(
+            *[asyncio.to_thread(_poisson_fallback, m) for m in poisson_needed]
+        )
+
+
 async def get_live_matches() -> list[MatchContext]:
     """Retorna partidas da Premier League ao vivo, com odds e probabilidades."""
     try:
@@ -164,18 +209,7 @@ async def get_live_matches() -> list[MatchContext]:
         return []
 
     matches = [_build_match(e, status="live") for e in data.get("results", [])]
-
-    # Parallel odds fetch (same pattern as upcoming)
-    odds_results = await asyncio.gather(
-        *[_fetch_odds(m.event_id) for m in matches],
-        return_exceptions=True,
-    )
-    for match, odds in zip(matches, odds_results):
-        if isinstance(odds, OddsSnapshot):
-            match.odds = odds
-            match.probabilities = _remove_bookmaker_margin(
-                odds.home_win, odds.draw, odds.away_win
-            )
+    await _attach_odds_and_probabilities(matches)
     return matches
 
 
@@ -193,22 +227,8 @@ async def get_upcoming_matches() -> list[MatchContext]:
         logger.warning("get_upcoming_matches failed: %s", exc)
         return []
 
-    events = data.get("results", [])
-    matches = [_build_match(e, status="upcoming") for e in events]
-
-    # Fetch odds for all upcoming matches in parallel
-    odds_results = await asyncio.gather(
-        *[_fetch_odds(m.event_id) for m in matches],
-        return_exceptions=True,
-    )
-
-    for match, odds in zip(matches, odds_results):
-        if isinstance(odds, OddsSnapshot):
-            match.odds = odds
-            match.probabilities = _remove_bookmaker_margin(
-                odds.home_win, odds.draw, odds.away_win
-            )
-
+    matches = [_build_match(e, status="upcoming") for e in data.get("results", [])]
+    await _attach_odds_and_probabilities(matches)
     return matches
 
 
@@ -239,6 +259,8 @@ async def get_match_by_id(event_id: str) -> Optional[MatchContext]:
         match.probabilities = _remove_bookmaker_margin(
             odds.home_win, odds.draw, odds.away_win
         )
+    else:
+        await asyncio.to_thread(_poisson_fallback, match)
     return match
 
 
